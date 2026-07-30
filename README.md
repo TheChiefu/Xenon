@@ -27,5 +27,16 @@ Basic Security for:
     - [] Android Build
 - [] TBD
 
+## Developer Comment(s):
+I am not a database, server, or security developer; so have no expectation of a professional grade chat
+application. Although I work in software development I primary work on the GUI side (Qt) and video game space.
+
+I wanted a project to learn Rust on an have a useful tool my friends and I can use. We are primarily using
+[Spacebar](https://github.com/spacebarchat) + [Fermo](https://git.sovrahi.com/oh64/Fermo), so if you are looking
+to move away from Discord like we did I'd suggest looking at those projects. This project is meant to be similar
+in concept to those (self-hostable private chat app), but less of a direct discord clone. 
+
+_Set expectations accordingly_
+
 ## License:
 TBD
