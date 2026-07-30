@@ -1,7 +1,5 @@
--- Initial schema. Timestamps are Unix SECONDS.
--- Connection settings (foreign_keys, WAL, synchronous, busy_timeout, secure_delete)
--- are NOT set here. They are per-connection concerns and live in SqliteConnectOptions.
--- Text length CHECKs are outer bounds, not product limits. See data-model.md.
+-- Initial schema
+-- Timestamps are Unix SECONDS
 
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
