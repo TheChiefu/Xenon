@@ -27,7 +27,7 @@ pub async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
 
     match result {
         Ok(()) => {
-            let fmt_pass = utils::fancy_invite_fmt(&password, 4, '-');
+            let fmt_pass = utils::fancy_invite_fmt(&password, 6, '-');
             println!("Owner account created: ");
             println!("Username: {username}");
             println!("Password: [{fmt_pass}] Store this somewhere safe!!!");

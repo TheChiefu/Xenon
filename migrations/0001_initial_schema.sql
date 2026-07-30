@@ -1,12 +1,16 @@
--- Initial schema
--- Timestamps are Unix SECONDS
+-- Initial schema. Timestamps are Unix SECONDS.
+-- Connection settings (foreign_keys, WAL, synchronous, busy_timeout, secure_delete)
+-- are NOT set here. They are per-connection concerns and live in SqliteConnectOptions.
+-- Text length CHECKs are outer bounds, not product limits. See data-model.md.
+-- Timestamps are unit-agnostic here: columns carry only relational CHECKs
+-- (expires_at > created_at, etc). The unit is decided in Rust by now_ms().
 
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
     sha256      BLOB NOT NULL UNIQUE CHECK (length(sha256) = 32),
     mime        TEXT NOT NULL CHECK (length(mime) BETWEEN 3 AND 255),
     byte_size   INTEGER NOT NULL CHECK (byte_size >= 0),
-    created_at  INTEGER NOT NULL CHECK (created_at BETWEEN 1600000000 AND 4000000000)
+    created_at  INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE users (
@@ -22,7 +26,7 @@ CREATE TABLE users (
     status_pref     INTEGER NOT NULL DEFAULT 0 CHECK (status_pref IN (0, 1, 2, 3)),
     email           TEXT CHECK (email IS NULL OR
                         (email = lower(email) AND length(email) BETWEEN 3 AND 254)),
-    created_at      INTEGER NOT NULL CHECK (created_at BETWEEN 1600000000 AND 4000000000),
+    created_at      INTEGER NOT NULL,
     deleted_at      INTEGER,
     CHECK (deleted_at IS NULL OR deleted_at >= created_at)
 ) STRICT;
@@ -35,7 +39,7 @@ CREATE TABLE linked_accounts (
     platform         INTEGER NOT NULL CHECK (platform IN (0, 1, 2)),
     platform_user_id TEXT NOT NULL CHECK (length(platform_user_id) BETWEEN 1 AND 128),
     platform_handle  TEXT CHECK (platform_handle IS NULL OR length(platform_handle) <= 128),
-    linked_at        INTEGER NOT NULL CHECK (linked_at BETWEEN 1600000000 AND 4000000000),
+    linked_at        INTEGER NOT NULL,
     PRIMARY KEY (user_id, platform),
     UNIQUE (platform, platform_user_id)
 ) STRICT;
@@ -43,7 +47,7 @@ CREATE TABLE linked_accounts (
 CREATE TABLE sessions (
     token_hash  BLOB PRIMARY KEY CHECK (length(token_hash) = 32),
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at  INTEGER NOT NULL CHECK (created_at BETWEEN 1600000000 AND 4000000000),
+    created_at  INTEGER NOT NULL,
     expires_at  INTEGER NOT NULL CHECK (expires_at > created_at),
     revoked_at  INTEGER CHECK (revoked_at IS NULL OR revoked_at >= created_at)
 ) STRICT;
@@ -58,7 +62,7 @@ CREATE TABLE rooms (
     owner_id    BLOB REFERENCES users(id),
     dm_a        BLOB REFERENCES users(id) CHECK (dm_a IS NULL OR length(dm_a) = 16),
     dm_b        BLOB REFERENCES users(id) CHECK (dm_b IS NULL OR length(dm_b) = 16),
-    created_at  INTEGER NOT NULL CHECK (created_at BETWEEN 1600000000 AND 4000000000),
+    created_at  INTEGER NOT NULL,
     mutation_seq INTEGER NOT NULL DEFAULT 0 CHECK (mutation_seq >= 0),
     CHECK ((dm_a IS NULL) = (dm_b IS NULL)),
     CHECK (dm_a IS NULL OR (dm_a < dm_b AND is_private = 1 AND owner_id IS NULL))
@@ -69,7 +73,7 @@ CREATE UNIQUE INDEX dm_pair ON rooms(dm_a, dm_b) WHERE dm_a IS NOT NULL;
 CREATE TABLE room_access (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    granted_at  INTEGER NOT NULL CHECK (granted_at BETWEEN 1600000000 AND 4000000000),
+    granted_at  INTEGER NOT NULL,
     PRIMARY KEY (room_id, user_id)
 ) STRICT;
 
@@ -89,7 +93,7 @@ CREATE TABLE messages (
     author_id     BLOB NOT NULL REFERENCES users(id),
     body          TEXT CHECK (body IS NULL OR length(body) BETWEEN 1 AND 8000),
     client_nonce  BLOB NOT NULL CHECK (length(client_nonce) = 16),
-    created_at    INTEGER NOT NULL CHECK (created_at BETWEEN 1600000000 AND 4000000000),
+    created_at    INTEGER NOT NULL,
     edited_at     INTEGER CHECK (edited_at IS NULL OR edited_at >= created_at),
     deleted_at    INTEGER CHECK (deleted_at IS NULL OR deleted_at >= created_at),
     CHECK (deleted_at IS NULL OR body IS NULL)
@@ -150,7 +154,7 @@ CREATE TABLE user_files (
     user_id   BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     file_id   BLOB NOT NULL REFERENCES files(id),
     filename  TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255),
-    added_at  INTEGER NOT NULL CHECK (added_at BETWEEN 1600000000 AND 4000000000),
+    added_at  INTEGER NOT NULL,
     PRIMARY KEY (user_id, file_id)
 ) STRICT;
 
@@ -160,7 +164,7 @@ CREATE TABLE invites (
     code        TEXT PRIMARY KEY
                 CHECK (code NOT GLOB '*[^A-Z0-9]*' AND length(code) BETWEEN 12 AND 64),
     created_by  BLOB NOT NULL REFERENCES users(id),
-    created_at  INTEGER NOT NULL CHECK (created_at BETWEEN 1600000000 AND 4000000000),
+    created_at  INTEGER NOT NULL,
     expires_at  INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
     max_uses    INTEGER CHECK (max_uses IS NULL OR max_uses > 0),
     uses        INTEGER NOT NULL DEFAULT 0 CHECK (uses >= 0),

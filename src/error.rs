@@ -1,4 +1,8 @@
 use std::fmt;
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -7,6 +11,7 @@ pub enum AppError {
     UsernameTaken,
     EmailTaken,
     OwnerExists,
+    Forbidden,
     Db(sqlx::Error),
     Hash(argon2::password_hash::Error),
     Validation(String),
@@ -22,7 +27,8 @@ impl fmt::Display for AppError {
             AppError::Hash(e) => write!(f, "password hashing error: {e}"),
             AppError::Validation(msg) => write!(f, "{msg}"),
             AppError::EmailTaken => write!(f, "email already in use"),
-            AppError::OwnerExists => write!(f, "server owner already exists")
+            AppError::OwnerExists => write!(f, "server owner already exists"),
+            AppError::Forbidden => write!(f,"action not allowed"),
         }
     }
 }
@@ -52,6 +58,27 @@ impl From<argon2::password_hash::Error> for AppError {
 impl From<sqlx::migrate::MigrateError> for AppError {
     fn from(e: sqlx::migrate::MigrateError) -> Self {
         AppError::Db(e.into())
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match &self {
+            AppError::InvalidCredentials => (StatusCode::UNAUTHORIZED, self.to_string()),
+            AppError::InvalidInvite => (StatusCode::FORBIDDEN, self.to_string()),
+            AppError::UsernameTaken | AppError::EmailTaken => (StatusCode::CONFLICT, self.to_string()),
+            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
+
+            // Never reaches client
+            AppError::OwnerExists | AppError::Db(_) | AppError::Hash(_) => {
+                let id = Uuid::now_v7();
+                eprintln!("internal error {id}: {self:?}");
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("internal server error ({id})"))
+            }
+        };
+
+        (status, Json(serde_json::json!({"error": message}))).into_response()
     }
 }
 

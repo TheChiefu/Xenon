@@ -5,7 +5,6 @@ use crate::error::{AppError, Result};
 use crate::{models::GlobalRole, utils, validate};
 
 
-
 pub async fn register(
     pool: &sqlx::SqlitePool,
     code: &str,
@@ -19,9 +18,7 @@ pub async fn register(
     let display_name = display_name.trim();
     validate::username(username)?;
     validate::display_name(display_name)?;
-
-    // Hash before any transaction
-    let password_hash = utils::hash_password(password)?;
+    validate::password(password)?;
 
     // Open transcation
     let mut tx = pool.begin().await?; // Transaction
@@ -46,6 +43,9 @@ pub async fn register(
         return Err(AppError::InvalidInvite);
     }
 
+    // Hash password for storage in DB
+    let password_hash = utils::hash_password(password)?;
+
     // Create user
     let id = Uuid::now_v7();
     db::insert_user(
@@ -58,11 +58,10 @@ pub async fn register(
     ).await?;
 
     // Create session key
-    let secret = db::create_session(&mut *tx, id).await?;
+    let token = db::create_session(&mut *tx, id).await?;
     tx.commit().await?;
-    Ok((id, secret))
+    Ok((id, token))
 }
-
 
 pub async fn login(
     pool: &sqlx::SqlitePool,
@@ -104,8 +103,7 @@ pub async fn login(
     }
 
     // Create session key
-    let secret = db::create_session(&mut *conn, user_id).await?;
-    Ok(secret)
+    let token = db::create_session(&mut *conn, user_id).await?;
+    Ok(token)
 
 }
-

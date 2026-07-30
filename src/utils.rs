@@ -3,14 +3,21 @@ use argon2::password_hash::{Error as PhcError, PasswordHasher, SaltString};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{AppError, Result};
 
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before 1970")
+        .as_millis() as i64
+}
 
 /// Generates invite code from uppercase alphanumerics
 pub fn generate_invite_code() -> String {
     const CODE_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const CODE_LEN: usize = 8;
+    const CODE_LEN: usize = 12;
 
     let mut code = String::with_capacity(CODE_LEN);
 
