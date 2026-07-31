@@ -12,7 +12,7 @@ use crate::error::{AppError, Result};
 // Register
 #[derive(Deserialize)]
 pub struct RegisterRequest {
-    pub code: String,
+    pub invite_code: String,
     pub username: String,
     pub display_name: String,
     pub password: String,
@@ -21,7 +21,7 @@ pub struct RegisterRequest {
 #[derive(Serialize)]
 pub struct RegisterResponse {
     pub id: Uuid,
-    pub token: String,
+    pub session_token: String,
 }
 
 async fn register(
@@ -30,14 +30,14 @@ async fn register(
 ) -> Result<(StatusCode, Json<RegisterResponse>)> {
     let (id, token) = api::register(
         &pool,
-        &body.code,
+        &body.invite_code,
         &body.username,
         &body.display_name,
         &body.password,
     )
     .await?;
 
-    Ok((StatusCode::CREATED, Json(RegisterResponse { id, token })))
+    Ok((StatusCode::CREATED, Json(RegisterResponse { id, session_token: token })))
 }
 
 // Login
