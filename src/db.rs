@@ -1,4 +1,5 @@
 use uuid::Uuid;
+use tracing;
 
 use crate::error::{self, AppError, Result};
 use crate::models::{GlobalRole, Permissions};
@@ -75,7 +76,7 @@ pub async fn insert_user(
     .bind(password_hash)
     .bind(global_role)
     .bind(utils::now_ms())
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(error::unique_violation)?;
 
@@ -98,7 +99,7 @@ pub async fn create_session(
     .bind(user_id)
     .bind(utils::now_ms())
     .bind(SESSION_LIFETIME)
-    .execute(conn)
+    .execute(&mut *conn)
     .await?;
 
     Ok(token.secret)
@@ -127,7 +128,7 @@ pub async fn create_invite(
     .bind(now)
     .bind(expires_at)
     .bind(max_uses)
-    .execute(conn)
+    .execute(&mut *conn)
     .await?;
 
     Ok(code)
@@ -155,7 +156,7 @@ pub async fn effective_permissions(
     )
     .bind(room_id)
     .bind(user_id)
-    .fetch_optional(conn)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(result)
@@ -172,15 +173,34 @@ pub async fn global_role(
         "SELECT global_role FROM users WHERE id = ?1 AND deleted_at IS NULL"
     )
     .bind(user_id)
-    .fetch_one(conn)
+    .fetch_one(&mut *conn)
     .await;
 
     match result {
         Ok(val) => Ok(val),
         Err(sqlx::Error::RowNotFound) => {
-            eprintln!("references missing or tombstoned user {user_id}");
+            tracing::warn!("references missing or tombstoned user {user_id}");
             Err(AppError::Forbidden)
         },
         Err(other) => Err(AppError::Db(other))
     }
+}
+
+pub async fn room_member_ids(
+    conn: &mut sqlx::SqliteConnection,
+    room_id: Uuid,
+) -> Result<Vec<Uuid>>
+{
+    let members: Vec<Uuid> = sqlx::query_scalar(
+        "
+        SELECT user_id
+        FROM room_access
+        WHERE room_id = ?1
+        "
+    )
+    .bind(room_id)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(members)
 }

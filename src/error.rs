@@ -3,6 +3,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
+use tracing;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -73,7 +74,7 @@ impl IntoResponse for AppError {
             // Never reaches client
             AppError::OwnerExists | AppError::Db(_) | AppError::Hash(_) => {
                 let id = Uuid::now_v7();
-                eprintln!("internal error {id}: {self:?}");
+                tracing::error!("internal error {id}: {self}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("internal server error ({id})"))
             }
         };

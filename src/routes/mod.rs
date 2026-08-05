@@ -1,20 +1,25 @@
 mod auth;
 mod messages;
 mod rooms;
+mod websockets;
+
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum::http;
-use axum::routing::{delete, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use sqlx::SqlitePool;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
 
 // Main Router //
-pub fn router(pool: SqlitePool) -> Router {
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/register", post(auth::register))
         .route("/login", post(auth::login))
@@ -23,7 +28,8 @@ pub fn router(pool: SqlitePool) -> Router {
         .route("/rooms/{id}/join", post(rooms::join_room))
         .route("/rooms/{id}/members/me", delete(rooms::leave_room))
         .route("/rooms/{id}/messages", post(messages::post_message).get(messages::fetch_messages))
-        .with_state(pool)
+        .route("/ws", get(websockets::ws_handler))
+        .with_state(state)
 }
 
 /// The caller's id, resolved from the Authorization header.
@@ -66,3 +72,32 @@ where
         Ok(AuthUser(user_id))
     }
 }
+
+// App State
+
+/// One broadcast channel per room, keyed by room id:
+///
+/// - Arc: Counted pointer, so every clone of AppState reads and writes to the same map
+/// - RwLock: (Many readers/one writer mutex) Connects and disconnects write, broadcasts read
+/// - broadcast: one channel per room where a single send reaches every subscriber.
+///   Sockets subscribe on connect and their subscription ends when they drop.
+///   The map keeps the channel after its last subscriber leaves.
+type Registry = Arc<RwLock<HashMap<Uuid, broadcast::Sender<String>>>>;
+
+/// Cloned per request
+/// FromRef generates a per-field accessor, letting handlers keep asking for State<SqlitePool>
+#[derive(Clone, FromRef)]
+pub struct AppState {
+    pool: SqlitePool,
+    registry: Registry
+}
+
+impl AppState{
+    pub fn new(pool: SqlitePool) -> Self {
+        AppState{
+            pool,
+            registry: Registry::default()
+        }
+    }
+}
+

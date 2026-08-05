@@ -5,12 +5,15 @@ edition = "2024"
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["macros", "ws"] }
 hex = "0.4"
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"]}
 serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "uuid", "migrate"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 uuid = { version = "1", features = ["v7", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = "0.3.33"

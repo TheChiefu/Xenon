@@ -9,6 +9,7 @@ use super::AuthUser;
 use crate::api;
 use crate::error::{AppError, Result};
 use crate::models::Message;
+use crate::routes::{AppState, websockets};
 
 /// Messages
 
@@ -18,7 +19,7 @@ pub struct PostMessageRequest {
     pub client_nonce: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct MessageResponse {
     pub seq: i64,
     pub id: Uuid,
@@ -47,7 +48,7 @@ impl From<Message> for MessageResponse {
 
 pub async fn post_message (
     AuthUser(user_id): AuthUser,
-    State(pool): State<SqlitePool>,
+    State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
     Json(body): Json<PostMessageRequest>
 ) -> Result<(StatusCode, Json<MessageResponse>)> {
@@ -66,7 +67,7 @@ pub async fn post_message (
 
     // Attempt to post a message
     let result = api::post_message(
-        &pool,
+        &app_state.pool,
         room_id,
         user_id,
         &body.body,
@@ -74,7 +75,15 @@ pub async fn post_message (
     ).await?;
 
     match result {
-        api::Posted::Created(msg) => Ok((StatusCode::CREATED, Json(msg.into()))),
+
+        // If message is posted, broadcast to all subscribed users in room
+        api::Posted::Created(msg) => {
+            let response = MessageResponse::from(msg);
+            websockets::broadcast_message(&app_state, room_id, &response).await;
+            Ok((StatusCode::CREATED, Json(response)))
+        },
+
+        // If message is duplicate, return OK back to requester (no broadcast)
         api::Posted::Duplicate(msg) => Ok((StatusCode::OK, Json(msg.into()))),
     }
 }

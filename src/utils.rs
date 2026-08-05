@@ -89,16 +89,3 @@ static DECOY_HASH: LazyLock<String> = LazyLock::new(|| {
 pub fn burn_verify(password: &str) {
     let _ = verify_password(password, &DECOY_HASH);
 }
-
-/// Format an invite code with a separator and fixed sep size
-pub fn fancy_invite_fmt(s: &str, x: usize, separator: char) -> String {
-    let mut result = String::with_capacity(s.len() + (s.len() / x));
-    for (i, c) in s.chars().enumerate() {
-        if i != 0 && i % x == 0 {
-            result.push(separator);
-        }
-        result.push(c);
-    }
-
-    result
-}
