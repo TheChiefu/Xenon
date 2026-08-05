@@ -1,8 +1,8 @@
 use uuid::Uuid;
 
-use crate::db;
 use crate::error::{AppError, Result};
-use crate::{models::GlobalRole, utils, validate};
+use crate::models::GlobalRole;
+use crate::{db, utils, validate};
 
 
 pub async fn register(
@@ -27,13 +27,14 @@ pub async fn register(
     let claimed = sqlx::query(
         "
         UPDATE invites SET uses = uses + 1
-        WHERE code = ?
+        WHERE code = ?1
             AND revoked_at IS NULL
-            AND (expires_at IS NULL OR expires_at > unixepoch())
+            AND (expires_at IS NULL OR expires_at > ?2)
             AND (max_uses IS NULL OR uses < max_uses)
         ",
     )
     .bind(code.trim().to_ascii_uppercase()) // Invites code are stored uppercase
+    .bind(utils::now_ms())
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -54,7 +55,7 @@ pub async fn register(
         username,
         display_name,
         &password_hash,
-        GlobalRole::Member
+        GlobalRole::Visitor
     ).await?;
 
     // Create session key
@@ -73,7 +74,11 @@ pub async fn login(
 
     // Username lookup
     let lookup = sqlx::query_as::<_, (Uuid, Option<String>)>(
-    "SELECT id, password_hash FROM users WHERE username = ? AND deleted_at IS NULL",
+        "
+        SELECT id, password_hash
+        FROM users
+        WHERE username = ?1 AND deleted_at IS NULL
+        "
     )
     .bind(username)
     .fetch_one(&mut *conn)

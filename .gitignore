@@ -1,0 +1,9 @@
+# Rust Files
+/target/
+**/*.rs.bk
+*.pdb
+
+# Database Files
+chat.db
+chat.db-shm
+chat.db-wal

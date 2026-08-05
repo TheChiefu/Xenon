@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::error::{self, AppError, Result};
-use crate::models::GlobalRole;
+use crate::models::{GlobalRole, Permissions};
 use crate::utils;
 
 pub const DAY: i64 = 86400000; // Milliseconds
@@ -66,7 +66,7 @@ pub async fn insert_user(
     sqlx::query(
         "
         INSERT INTO users (id, username, display_name, password_hash, global_role, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ",
     )
     .bind(id)
@@ -111,6 +111,7 @@ pub async fn create_invite(
     max_uses: Option<i64>,
     lifetime: Option<i64>,
 ) -> Result<String> {
+
     let code = utils::generate_invite_code();
     let now = utils::now_ms();
     let expires_at = lifetime.map(|ms| now.saturating_add(ms));
@@ -132,28 +133,54 @@ pub async fn create_invite(
     Ok(code)
 }
 
-pub async fn require_admin(
+
+/// Given a room and user id, get permission mask of that user within the room.
+/// Result type, if any failure occurs bubble it up, otherwise return an Ok
+/// type for the following cases:
+/// 
+/// - None: No permission to room (cannot access or interact with it)
+/// - Some: Mask of allowed permissions in a room
+pub async fn effective_permissions(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+    room_id: Uuid
+) -> Result<Option<Permissions>> {
+
+    let result: Option<Permissions> = sqlx::query_scalar(
+        "
+        SELECT COALESCE(a.permissions, r.default_permissions)
+        FROM room_access a JOIN rooms r ON r.id = a.room_id
+        WHERE a.room_id = ?1 AND a.user_id = ?2
+        "
+    )
+    .bind(room_id)
+    .bind(user_id)
+    .fetch_optional(conn)
+    .await?;
+
+    Ok(result)
+}
+
+
+/// Check if a user has global admin permissions
+pub async fn global_role(
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid
-) -> Result<()> {
+) -> Result<GlobalRole> {
 
     let result = sqlx::query_scalar(
-        "SELECT global_role FROM users WHERE id = ? AND deleted_at IS NULL"
+        "SELECT global_role FROM users WHERE id = ?1 AND deleted_at IS NULL"
     )
     .bind(user_id)
     .fetch_one(conn)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::RowNotFound => {
-            eprintln!("references missing user {user_id}");
-            AppError::Forbidden
-        },
-        other => AppError::Db(other),
-    })?;
+    .await;
 
     match result {
-        GlobalRole::Admin | GlobalRole::Owner => Ok(()),
-        GlobalRole::Member => Err(AppError::Forbidden)
+        Ok(val) => Ok(val),
+        Err(sqlx::Error::RowNotFound) => {
+            eprintln!("references missing or tombstoned user {user_id}");
+            Err(AppError::Forbidden)
+        },
+        Err(other) => Err(AppError::Db(other))
     }
-    
 }

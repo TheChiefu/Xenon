@@ -1,13 +1,14 @@
-use axum::{Json, Router};
 use axum::extract::State;
-use axum::http::{self, StatusCode};
-use axum::routing::post;
+use axum::http::StatusCode;
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::{api, db, validate};
+use super::AuthUser;
 use crate::error::{AppError, Result};
+use crate::models::GlobalRole;
+use crate::{api, db, validate};
 
 // Register
 #[derive(Deserialize)]
@@ -24,7 +25,7 @@ pub struct RegisterResponse {
     pub session_token: String,
 }
 
-async fn register(
+pub async fn register(
     State(pool): State<SqlitePool>,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>)> {
@@ -52,7 +53,7 @@ pub struct LoginResponse {
     pub token: String,
 }
 
-async fn login(
+pub async fn login(
     State(pool): State<SqlitePool>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
@@ -72,32 +73,23 @@ pub struct CreateInviteResponse {
     pub code: String,
 }
 
-async fn create_invite(
-    headers: http::HeaderMap,
+pub async fn create_invite(
+    AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
     Json(body): Json<CreateInviteRequest>,
 ) -> Result<(StatusCode, Json<CreateInviteResponse>)>
 {
     let mut conn = pool.acquire().await?;
-
-    let mut values = headers.get_all(http::header::AUTHORIZATION).iter();
-    let token = match (values.next(), values.next()) {
-        (Some(v), None) => v
-            .to_str()
-            .ok()
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .ok_or(AppError::InvalidCredentials)?,
-        _ => return Err(AppError::InvalidCredentials),
-    };
-
-    // Authenticate
-    let user_id = db::authenticate(&mut conn, token)
-        .await?
-        .ok_or(AppError::InvalidCredentials)?;
-
     
-    // Check if user has permission to create invite
-    db::require_admin(&mut conn, user_id).await?;
+    // Check if user has permission to create an invite
+    let role = db::global_role(&mut conn, user_id).await?;
+    let allowed_roles = [
+        GlobalRole::Owner,
+        GlobalRole::Admin,
+    ];
+    if !allowed_roles.contains(&role) {
+        return Err(AppError::Forbidden);
+    }
 
     // Create invite code
     let max_uses = body.max_uses.unwrap_or(validate::INVITE_DEFAULT_MAX_USES);
@@ -106,13 +98,4 @@ async fn create_invite(
     let code = db::create_invite(&mut conn, user_id, Some(max_uses), Some(lifetime)).await?;
     
     Ok((StatusCode::CREATED, Json(CreateInviteResponse {code})))
-}
-
-// Main Router //
-pub fn router(pool: SqlitePool) -> Router {
-    Router::new()
-        .route("/register", post(register))
-        .route("/login", post(login))
-        .route("/invite",post(create_invite))
-        .with_state(pool)
 }

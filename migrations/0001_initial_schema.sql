@@ -32,7 +32,7 @@ CREATE TABLE users (
     avatar_file_id  BLOB REFERENCES files(id),
     banner_file_id  BLOB REFERENCES files(id),
     password_hash   TEXT,
-    global_role     INTEGER NOT NULL CHECK (global_role IN (0, 1, 2)),
+    global_role     INTEGER NOT NULL CHECK (global_role IN (0, 1, 2, 3)),
     status_pref     INTEGER NOT NULL DEFAULT 0 CHECK (status_pref IN (0, 1, 2, 3)),
     email           TEXT CHECK (email IS NULL OR
                         (email = lower(email) AND length(email) BETWEEN 3 AND 254)),

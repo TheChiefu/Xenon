@@ -1,4 +1,5 @@
-use crate::{db, error::{AppError, Result}};
+use crate::db;
+use crate::error::{AppError, Result};
 
 const LEN_MIN_USERNAME: usize = 3;
 const LEN_MAX_USERNAME: usize = 32;
@@ -6,6 +7,9 @@ const LEN_MIN_DISPLAY_NAME: usize = 1;
 const LEN_MAX_DISPLAY_NAME: usize = 64;
 const LEN_MIN_PASSWORD: usize = 8;
 const LEN_MAX_PASSWORD: usize = 128;
+const LEN_MAX_ROOM_NAME: usize = 128;
+const LEN_MIN_MESSAGE_BODY: usize = 1;
+const LEN_MAX_MESSAGE_BODY: usize = 8000;
 
 // Invite Defaults
 pub const INVITE_DEFAULT_MAX_USES: i64 = 1;
@@ -66,6 +70,44 @@ pub fn invite_params(max_uses: i64, lifetime: i64) -> Result<()> {
         return Err(AppError::Validation(format!(
             "invite error: lifetime must be at least 1 ms"
         )));
+    }
+
+    Ok(())
+}
+
+pub fn room_name(name: Option<&str>) -> Result<Option<&str>> {
+    
+    match name {
+        Some(val) => {
+            let clean = val.trim();
+            let len = clean.chars().count();
+
+            // Normalize empty names as an "unnamed" room
+            if len <= 0 {
+                return Ok(None);
+            }
+
+            // Reject names longer than allowed limit
+            if len > LEN_MAX_ROOM_NAME {
+                return Err(AppError::Validation(format!(
+                    "room name error: Name longer than character limit [{LEN_MAX_ROOM_NAME}]")
+                ));
+            }
+
+            return Ok(Some(clean))
+        }
+
+        // Null values are automatically returned as "unnamed" room
+        None => return Ok(None)
+    }
+}
+
+pub fn message_body(content: &str) -> Result<()> {
+    let len = content.chars().count();
+    if len < LEN_MIN_MESSAGE_BODY || len > LEN_MAX_MESSAGE_BODY {
+        return Err(AppError::Validation(format!(
+            "message error: outside of available range ({LEN_MIN_MESSAGE_BODY} - {LEN_MAX_MESSAGE_BODY})"
+        ))) 
     }
 
     Ok(())

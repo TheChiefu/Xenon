@@ -1,10 +1,9 @@
-use sqlx::sqlite::SqlitePool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::GlobalRole;
-use crate::utils;
+use crate::{db, utils};
 
 /// Generates a default owner for the server for inital setup
 pub async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
