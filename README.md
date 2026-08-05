@@ -11,7 +11,7 @@ Using SQLite for making database mangement simple and not requiring an active se
 Basic Security for:
 |Category| Method |
 |-|-|
-| Invites Codes (8 Characters by Default) | OsRng | 
+| Invite Codes (12 Characters by Default) | OsRng | 
 | Password Hashing| Argon2id |
 | Session Tokens | OsRng + SHA256 |
 
@@ -20,12 +20,21 @@ Basic Security for:
 - [x] Create Database model/schema (first pass)
     - [x] Owner user created at first launch
     - [x] Create `chat.db` at first launch
-- [] Get REST API functional
-- [] Get sockets functional
-- [] Create rudimentary GUI Application (Slint)
-    - [] Linux/Windows Build
-    - [] Android Build
-- [] TBD
+- [x] Get REST API functional
+    - [x] Registration, login, invite codes
+    - [x] Rooms: create, join, leave, list
+    - [x] Messages: post, paginated fetch
+- [x] Get sockets functional
+    - [x] Live message broadcast to everyone in a room
+- [ ] File uploads and attachments
+- [ ] Message (Search, Read state, Deletion)
+- [ ] Online presence and typing indicators
+- [ ] Game presence (Xbox/Steam)
+- [ ] Rate limiting
+- [ ] Create rudimentary GUI Application (Slint)
+    - [ ] Linux/Windows Build
+    - [ ] Android Build
+- [ ] TBD
 
 ## Developer Comment(s):
 I am not a database, server, or security developer; so have no expectation of a professional grade chat
