@@ -7,11 +7,9 @@
 -- (expires_at > created_at, etc). The unit is decided in Rust by now_ms(),
 -- which produces Unix MILLISECONDS. Do not encode a unit in this file.
 --
--- Text length CHECKs are the SAME numbers as the product limits in validate.rs.
--- They are not outer bounds. The CHECK enforces the limit on paths that bypass
--- validate.rs: the tombstone path, admin tooling, migrations, the sqlite3 CLI.
--- The two copies cannot be derived from each other, so every bounded column the
--- application writes needs a boundary test at max and max+1. See data-model.md.
+-- Length CHECKs here are structural. A minimum of 1 makes an empty string
+-- unstorable, so "unnamed" and "no body" each have one representation.
+-- Maximums live in the server config and are enforced by validate.rs.
 
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
@@ -21,13 +19,13 @@ CREATE TABLE files (
     created_at  INTEGER NOT NULL
 ) STRICT;
 
--- username max is 32 and the tombstone name is a 32-character UUID hex string.
--- There is no headroom. Lowering this breaks account deletion.
+-- The charset stays here because the tombstone path writes a username without
+-- going through validate.rs, generating the account's UUID as 32 hex characters.
 CREATE TABLE users (
     id              BLOB PRIMARY KEY CHECK (length(id) = 16),
     username        TEXT NOT NULL UNIQUE
-                    CHECK (username NOT GLOB '*[^a-z0-9_-]*' AND length(username) BETWEEN 3 AND 32),
-    display_name    TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 64),
+                    CHECK (username NOT GLOB '*[^a-z0-9_-]*' AND length(username) >= 1),
+    display_name    TEXT NOT NULL CHECK (length(display_name) >= 1),
     description     TEXT CHECK (description IS NULL OR length(description) <= 2000),
     avatar_file_id  BLOB REFERENCES files(id),
     banner_file_id  BLOB REFERENCES files(id),
@@ -77,7 +75,7 @@ CREATE INDEX sessions_expiry ON sessions(expires_at) WHERE revoked_at IS NULL;
 -- no override may do. 0 is legitimate (read-only room), -1 grants everything.
 CREATE TABLE rooms (
     id                  BLOB PRIMARY KEY CHECK (length(id) = 16),
-    name                TEXT CHECK (name IS NULL OR length(name) BETWEEN 1 AND 128),
+    name                TEXT CHECK (name IS NULL OR length(name) >= 1),
     visibility          INTEGER NOT NULL CHECK (visibility IN (0, 1, 2)),
     default_permissions INTEGER NOT NULL CHECK (default_permissions >= -1),
     created_at          INTEGER NOT NULL,
@@ -160,7 +158,7 @@ CREATE TABLE messages (
     id            BLOB NOT NULL UNIQUE CHECK (length(id) = 16),
     room_id       BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     author_id     BLOB NOT NULL REFERENCES users(id),
-    body          TEXT CHECK (body IS NULL OR length(body) BETWEEN 1 AND 8000),
+    body          TEXT CHECK (body IS NULL OR length(body) >= 1),
     client_nonce  BLOB NOT NULL CHECK (length(client_nonce) = 16),
     created_at    INTEGER NOT NULL,
     edited_at     INTEGER CHECK (edited_at IS NULL OR edited_at >= created_at),

@@ -4,10 +4,9 @@ use tracing;
 use crate::error::{self, AppError, Result};
 use crate::models::{GlobalRole, Permissions};
 use crate::utils;
+use crate::config;
 
 pub const DAY: i64 = 86400000; // Milliseconds
-const SESSION_LIFETIME: i64 = DAY * 30; // Default (30 Days)
-const SESSION_RENEW_AFTER: i64 = DAY; // Default (1 Day)
 
 
 pub async fn authenticate(
@@ -38,7 +37,9 @@ pub async fn authenticate(
     };
 
     // Extend session timer
-    if expires_at < now + SESSION_LIFETIME - SESSION_RENEW_AFTER {
+    let lifetime = config::get().session.lifetime_days * DAY;
+    let renew = config::get().session.renew_after_days_elapsed * DAY;
+    if expires_at < now + lifetime - renew {
         sqlx::query(
             "
             UPDATE sessions SET expires_at = ?1 + ?2
@@ -46,7 +47,7 @@ pub async fn authenticate(
             "
         )
         .bind(utils::now_ms())
-        .bind(SESSION_LIFETIME)
+        .bind(lifetime)
         .bind(hash.as_slice())
         .execute(&mut *conn)
         .await?;
@@ -89,6 +90,7 @@ pub async fn create_session(
 ) -> Result<String> {
 
     let token = utils::generate_session_token();
+    let lifetime = config::get().session.lifetime_days * DAY;
     sqlx::query(
         "
         INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
@@ -98,7 +100,7 @@ pub async fn create_session(
     .bind(token.hash.as_slice())
     .bind(user_id)
     .bind(utils::now_ms())
-    .bind(SESSION_LIFETIME)
+    .bind(lifetime)
     .execute(&mut *conn)
     .await?;
 

@@ -5,6 +5,10 @@ use crate::models::GlobalRole;
 use crate::{db, utils, validate};
 
 
+/// Redeems an invite and creates the account, returning the new id and a session.
+///
+/// The invite is claimed before the user is inserted so that retrieving "UsernameTaken"
+/// costs a valid invite (stops an attacker from brute forcing finding valid usernames).
 pub async fn register(
     pool: &sqlx::SqlitePool,
     code: &str,
@@ -20,7 +24,7 @@ pub async fn register(
     validate::display_name(display_name)?;
     validate::password(password)?;
 
-    // Open transcation
+    // Open transaction
     let mut tx = pool.begin().await?; // Transaction
 
     // Claim invite first
@@ -64,6 +68,11 @@ pub async fn register(
     Ok((id, token))
 }
 
+/// Verifies credentials and returns a new session token.
+///
+/// Every failure returns the same error, and an unknown username runs
+/// "burn_verify" so it costs the same time as a wrong password
+/// (ie. invalid username or password takes same ms response, hidden from attacker)
 pub async fn login(
     pool: &sqlx::SqlitePool,
     username: &str,

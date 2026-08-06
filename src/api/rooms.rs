@@ -11,7 +11,7 @@ use crate::{db, utils, validate};
 /// - room_name: Optional name of room (empty rooms are automatically handled by clients)
 /// - creator_permissions: Permission creator gives themselves on room creation
 /// - default_permissions: Permission given to users when they join the channel
-/// - visibility: Determines room public/private visbility
+/// - visibility: Determines room public/private visibility
 pub async fn create_room(
     pool: &sqlx::SqlitePool,
     creator_id: Uuid,
@@ -82,7 +82,7 @@ pub async fn create_room(
     .execute(&mut *tx)
     .await?;
 
-    // If no errors, commit transcation
+    // If no errors, commit transaction
     tx.commit().await?;
 
     // Return room id
@@ -155,7 +155,7 @@ pub async fn join_room(
     .execute(&mut *tx)
     .await?;
 
-    // If no errors, commit transcation
+    // If no errors, commit transaction
     tx.commit().await?;
 
     Ok(())

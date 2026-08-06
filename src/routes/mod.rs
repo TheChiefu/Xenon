@@ -24,20 +24,26 @@ pub fn router(state: AppState) -> Router {
         .route("/register", post(auth::register))
         .route("/login", post(auth::login))
         .route("/invite", post(auth::create_invite))
-        .route("/rooms", post(rooms::create_room).get(rooms::list_rooms))
+        .route("/rooms",
+            post(rooms::create_room)
+            .get(rooms::list_rooms)
+        )
         .route("/rooms/{id}/join", post(rooms::join_room))
         .route("/rooms/{id}/members/me", delete(rooms::leave_room))
-        .route("/rooms/{id}/messages", post(messages::post_message).get(messages::fetch_messages))
+        .route("/rooms/{id}/messages",
+            post(messages::post_message)
+            .get(messages::fetch_messages)
+        )
         .route("/ws", get(websockets::ws_handler))
         .with_state(state)
 }
 
 /// The caller's id, resolved from the Authorization header.
 /// Declared as a handler parameter, so axum authenticates before the body runs
-/// and omitting it is a compile error rather than an open endpoint.
 pub struct AuthUser(pub Uuid);
 
 
+/// Generic over the router's state, so it survives the state type changing
 impl<S> FromRequestParts<S> for AuthUser
 where 
     SqlitePool: FromRef<S>,
@@ -73,15 +79,18 @@ where
     }
 }
 
-// App State
+// App State //
 
-/// One broadcast channel per room, keyed by room id:
+/// One broadcast channel per connected user, keyed by user id.
+///
+/// Room membership stays in room_access and is read at broadcast time
 ///
 /// - Arc: Counted pointer, so every clone of AppState reads and writes to the same map
 /// - RwLock: (Many readers/one writer mutex) Connects and disconnects write, broadcasts read
-/// - broadcast: one channel per room where a single send reaches every subscriber.
-///   Sockets subscribe on connect and their subscription ends when they drop.
-///   The map keeps the channel after its last subscriber leaves.
+/// - broadcast: a single send reaches every subscriber, so one user's several
+///   devices each receive it. Sockets subscribe on connect and their
+///   subscription ends when they drop. The map keeps the channel after its
+///   last subscriber leaves.
 type Registry = Arc<RwLock<HashMap<Uuid, broadcast::Sender<String>>>>;
 
 /// Cloned per request

@@ -1,15 +1,6 @@
 use crate::db;
 use crate::error::{AppError, Result};
-
-const LEN_MIN_USERNAME: usize = 3;
-const LEN_MAX_USERNAME: usize = 32;
-const LEN_MIN_DISPLAY_NAME: usize = 1;
-const LEN_MAX_DISPLAY_NAME: usize = 64;
-const LEN_MIN_PASSWORD: usize = 8;
-const LEN_MAX_PASSWORD: usize = 128;
-const LEN_MAX_ROOM_NAME: usize = 128;
-const LEN_MIN_MESSAGE_BODY: usize = 1;
-const LEN_MAX_MESSAGE_BODY: usize = 8000;
+use crate::config;
 
 // Invite Defaults
 pub const INVITE_DEFAULT_MAX_USES: i64 = 1;
@@ -18,18 +9,23 @@ const _: () = assert!(INVITE_DEFAULT_MAX_USES >= 1);
 
 pub fn username(name: &str) -> Result<()> {
     let len = name.chars().count();
-    if len < LEN_MIN_USERNAME || len > LEN_MAX_USERNAME {
-        return Err(AppError::Validation(format!(
-        "username must be between {LEN_MIN_USERNAME} and {LEN_MAX_USERNAME} characters"
-    )));
+    let min = config::get().limits.username_min;
+    let max = config::get().limits.username_max;
+
+    // Enforce length limits
+    if len < min || len > max {
+        return Err(AppError::Validation(
+            format!("username error: must be between {min} and {max} characters")
+        ));
     }
 
+    // Enforce username restrictions
     for c in name.chars() {
         let allowed = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-';
         if !allowed {
-            return Err(AppError::Validation(format!(
-                "username may only contain lowercase letters, digits, underscores and hyphens"
-            )));
+            return Err(AppError::Validation(
+                format!("username error: may only contain lowercase, digits, underscores and hyphens")
+            ));
         }
     }
 
@@ -38,10 +34,13 @@ pub fn username(name: &str) -> Result<()> {
 
 pub fn display_name(name: &str) -> Result<()> {
     let len = name.chars().count();
-    if len < LEN_MIN_DISPLAY_NAME || len > LEN_MAX_DISPLAY_NAME {
-        return Err(AppError::Validation(format!(
-            "display name must be between {LEN_MIN_DISPLAY_NAME} and {LEN_MAX_DISPLAY_NAME} characters",
-        )));
+    let min = config::get().limits.display_name_min;
+    let max = config::get().limits.display_name_max;
+
+    if len < min || len > max {
+        return Err(AppError::Validation(
+            format!("display name error: must be between {min} and {max} characters")
+        ));
     }
 
     Ok(())
@@ -49,10 +48,13 @@ pub fn display_name(name: &str) -> Result<()> {
 
 pub fn password(password: &str) -> Result<()> {
     let len = password.chars().count();
-    if len < LEN_MIN_PASSWORD || len > LEN_MAX_PASSWORD {
-        return Err(AppError::Validation(format!(
-            "password error: outside of available range ({LEN_MIN_PASSWORD} - {LEN_MAX_PASSWORD})"
-        )));
+    let min = config::get().limits.password_min;
+    let max = config::get().limits.password_max;
+
+    if len < min || len > max {
+        return Err(AppError::Validation(
+            format!("password error: outside of available range ({min} - {max})")
+        ));
     }
 
     Ok(())
@@ -61,15 +63,15 @@ pub fn password(password: &str) -> Result<()> {
 pub fn invite_params(max_uses: i64, lifetime: i64) -> Result<()> {
 
     if max_uses < 1 {
-        return Err(AppError::Validation(format!(
-            "invite error: max uses must be at least 1"
-        )));
+        return Err(AppError::Validation(
+            format!("invite error: max uses must be at least 1")
+        ));
     }
 
     if lifetime < 1 {
-        return Err(AppError::Validation(format!(
-            "invite error: lifetime must be at least 1 ms"
-        )));
+        return Err(AppError::Validation(
+            format!("invite error: lifetime must be at least 1 ms")
+        ));
     }
 
     Ok(())
@@ -88,9 +90,10 @@ pub fn room_name(name: Option<&str>) -> Result<Option<&str>> {
             }
 
             // Reject names longer than allowed limit
-            if len > LEN_MAX_ROOM_NAME {
-                return Err(AppError::Validation(format!(
-                    "room name error: Name longer than character limit [{LEN_MAX_ROOM_NAME}]")
+            let max = config::get().limits.room_name_max;
+            if len > max {
+                return Err(AppError::Validation(
+                    format!("room name error: Name longer than character limit [{max}]")
                 ));
             }
 
@@ -104,10 +107,11 @@ pub fn room_name(name: Option<&str>) -> Result<Option<&str>> {
 
 pub fn message_body(content: &str) -> Result<()> {
     let len = content.chars().count();
-    if len < LEN_MIN_MESSAGE_BODY || len > LEN_MAX_MESSAGE_BODY {
-        return Err(AppError::Validation(format!(
-            "message error: outside of available range ({LEN_MIN_MESSAGE_BODY} - {LEN_MAX_MESSAGE_BODY})"
-        ))) 
+    let max = config::get().limits.message_body_max;
+    if len > max {
+        return Err(AppError::Validation(
+            format!("message error: outside of max character limit ({max})")
+        )) 
     }
 
     Ok(())

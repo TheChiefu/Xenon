@@ -1,4 +1,5 @@
 mod api;
+mod config;
 mod db;
 mod error;
 mod models;
@@ -16,11 +17,13 @@ use crate::error::{AppError, Result};
 use crate::models::GlobalRole;
 use crate::routes::AppState;
 
-const BIND_IP: &str = "127.0.0.1";
-const BIND_PORT: u16 = 3000;
-
 #[tokio::main]
 async fn main() -> Result<()> {
+
+    // Read configuration file (create defaults if not existing)
+    let config_path = std::env::var("XENON_CONFIG").unwrap_or_else(|_| "config.toml".into());
+    let db_path = std::env::var("XENON_DB").unwrap_or_else(|_| "chat.db".into());
+    config::init(&config_path);
 
     // Setup tracing
     tracing_subscriber::fmt()
@@ -32,7 +35,7 @@ async fn main() -> Result<()> {
 
     // Set DB options and properties
     let options = SqliteConnectOptions::new()
-        .filename("chat.db")
+        .filename(&db_path)
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal) // Write-Ahead Logging
@@ -53,7 +56,12 @@ async fn main() -> Result<()> {
 
     let app_state = AppState::new(pool);
     let app: axum::Router = routes::router(app_state);
-    let bind_addr = format!("{BIND_IP}:{BIND_PORT}");
+    let bind_addr = format!(
+        "{}:{}",
+        config::get().bind.ip,
+        config::get().bind.port
+    );
+
     let listener = tokio::net::TcpListener::bind(bind_addr).await.expect("failed to bind port to listener");
     tracing::info!("listening on {}", listener.local_addr().expect("failed to find bound address"));
 
@@ -109,7 +117,7 @@ async fn terminate() {
         .expect("failed to install SIGTERM handler")
         .recv()
         .await;
-    tracing::info!("Received \"SIGTERM\", termininating program...");
+    tracing::info!("Received \"SIGTERM\", terminating program...");
 }
 
 #[cfg(not(unix))]

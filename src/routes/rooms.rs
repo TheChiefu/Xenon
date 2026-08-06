@@ -37,7 +37,7 @@ pub async fn create_room(
         default_permissions = default_permissions.grant(permission);
     }
     
-    // Check if creator wants to inheit default permissions
+    // Check if creator wants to inherit default permissions
     // or have full access to room (Some - Full / None - Inherit)
     let creator_permissions = body.claim_all.then_some(Permissions::ALL);
 

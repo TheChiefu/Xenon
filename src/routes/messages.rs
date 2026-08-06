@@ -5,13 +5,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use super::AuthUser;
 use crate::api;
 use crate::error::{AppError, Result};
 use crate::models::Message;
-use crate::routes::{AppState, websockets};
+use crate::routes::{AuthUser, AppState, websockets};
 
-/// Messages
+// Post Message //
 
 #[derive(Deserialize)]
 pub struct PostMessageRequest {
@@ -87,6 +86,8 @@ pub async fn post_message (
         api::Posted::Duplicate(msg) => Ok((StatusCode::OK, Json(msg.into()))),
     }
 }
+
+// Fetch Messages //
 
 #[derive(Deserialize)]
 pub struct FetchQuery {
