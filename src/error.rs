@@ -5,6 +5,8 @@ use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
 use tracing;
 
+use crate::bytesize::ByteSize;
+
 #[derive(Debug)]
 pub enum AppError {
     InvalidCredentials,
@@ -13,9 +15,11 @@ pub enum AppError {
     EmailTaken,
     OwnerExists,
     Forbidden,
+    TooLarge(ByteSize),
     Db(sqlx::Error),
     Hash(argon2::password_hash::Error),
     Validation(String),
+    Io(std::io::Error),
 }
 
 impl fmt::Display for AppError {
@@ -30,6 +34,8 @@ impl fmt::Display for AppError {
             AppError::EmailTaken => write!(f, "email already in use"),
             AppError::OwnerExists => write!(f, "server owner already exists"),
             AppError::Forbidden => write!(f,"action not allowed"),
+            AppError::TooLarge(bytes) => write!(f, "content exceeds the {bytes} limit"),
+            AppError::Io(e) => write!(f, "i/o error: {e}"),
         }
     }
 }
@@ -39,6 +45,7 @@ impl std::error::Error for AppError {
         match self {
             AppError::Db(e) => Some(e),
             AppError::Hash(e) => Some(e),
+            AppError::Io(e) => Some(e),
             _ => None
         }
     }
@@ -62,6 +69,12 @@ impl From<sqlx::migrate::MigrateError> for AppError {
     }
 }
 
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        AppError::Io(e)
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
@@ -69,10 +82,15 @@ impl IntoResponse for AppError {
             AppError::InvalidInvite => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::UsernameTaken | AppError::EmailTaken => (StatusCode::CONFLICT, self.to_string()),
             AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::TooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
 
             // Never reaches client
-            AppError::OwnerExists | AppError::Db(_) | AppError::Hash(_) => {
+            AppError::OwnerExists |
+            AppError::Db(_) |
+            AppError::Hash(_) |
+            AppError::Io(_) => 
+            {
                 let id = Uuid::now_v7();
                 tracing::error!("internal error {id}: {self}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("internal server error ({id})"))

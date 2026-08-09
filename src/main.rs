@@ -1,4 +1,5 @@
 mod api;
+mod bytesize;
 mod config;
 mod db;
 mod error;
@@ -7,6 +8,7 @@ mod routes;
 mod utils;
 mod validate;
 
+use std::path::Path;
 use std::time::Duration;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
@@ -22,7 +24,6 @@ async fn main() -> Result<()> {
 
     // Read configuration file (create defaults if not existing)
     let config_path = std::env::var("XENON_CONFIG").unwrap_or_else(|_| "config.toml".into());
-    let db_path = std::env::var("XENON_DB").unwrap_or_else(|_| "chat.db".into());
     config::init(&config_path);
 
     // Setup tracing
@@ -32,10 +33,16 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| "xenon=info,sqlx=warn".into())
         )
         .init();
+    tracing::info!("loaded configuration file: {config_path}");
+    tracing::info!("starting server");
+
+    // Check if file directory is setup
+    ensure_files();
 
     // Set DB options and properties
+    let db_path = &config::get().storage.db_path;
     let options = SqliteConnectOptions::new()
-        .filename(&db_path)
+        .filename(db_path)
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal) // Write-Ahead Logging
@@ -50,6 +57,7 @@ async fn main() -> Result<()> {
 
     // Create initial DB if it does not already exists
     sqlx::migrate!().run(&pool).await?;
+    tracing::info!("connected to database: {db_path}");
 
     // Ensure owner bootstrap account is created for owner access
     ensure_owner(&pool).await?;
@@ -96,15 +104,49 @@ async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
     match result {
         Ok(()) => {
             // Printed, never logged. This is the only time the password is shown
-            println!("Owner account created: ");
-            println!("Username: {username}");
-            println!("Password: [{password}]");
-            println!("Note: This is not logged save somewhere safe");
+            println!("+-------- Owner account created --------+");
+            println!("           Username:\t{username}         ");
+            println!("           Password:\t{password}         ");
+            println!("  Save credentials (this is NOT logged)  ");
+            println!("+---------------------------------------+");
             Ok(())
         }
         Err(AppError::OwnerExists) => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+fn ensure_files() {
+
+    // Create or check if files folder path exists
+    let files_path = &config::get().storage.files_path;
+    if let Err(e) = std::fs::create_dir_all(files_path) {
+        eprintln!("{files_path}: {e}");
+        std::process::exit(1);
+    }
+
+    // Create/check "tmp" folder where streaming uploads sit
+    let subdir = Path::new(files_path).join("tmp");
+    if let Err(e) = std::fs::create_dir_all(&subdir) {
+        eprintln!("{}: {e}", subdir.display());
+        std::process::exit(1);
+    }
+
+    // Test if tmp directory is writable (create probe file)
+    let test_file = subdir.join("test");
+    if let Err(e) = std::fs::write(&test_file, "") {
+        eprintln!("{} is not writable: {e}", subdir.display());
+        std::process::exit(1);
+    }
+
+    // Remove probe file now that the write succeeded
+    if let Err(e) = std::fs::remove_file(&test_file) {
+        eprintln!("{}: {e}", test_file.display());
+        std::process::exit(1);
+    }
+
+    tracing::info!("file storage ready at: {files_path}");
+
 }
 
 // Shutdown //

@@ -120,3 +120,13 @@ pub fn can_delete_message(perm: Permissions, actor_id: Uuid, target_id: Uuid) ->
 
     return false
 }
+
+#[derive(sqlx::FromRow)]
+pub struct File {
+    pub id: Uuid,
+    pub sha256: Vec<u8>,
+    pub filename: String,
+    pub mime: String,
+    pub byte_size: i64,
+    pub created_at: i64
+}

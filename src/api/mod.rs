@@ -1,4 +1,5 @@
 mod auth;
+mod files;
 mod messages;
 mod rooms;
 

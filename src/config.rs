@@ -2,6 +2,10 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bytesize::{ByteSize, MEBIBYTE};
+
+
+/// Static Global (configured once on load from file)
 static CONFIG: OnceLock<Config> = OnceLock::new();
 const CONFIG_VERSION: u8 = 1;
 
@@ -10,6 +14,7 @@ const CONFIG_VERSION: u8 = 1;
 pub struct Config {
     pub version: u8,
     pub bind: Bind,
+    pub storage: Storage,
     pub session: Session,
     pub limits: Limits,
 }
@@ -19,16 +24,24 @@ impl Default for Config {
         Config {
             version: CONFIG_VERSION,
             bind: Bind::default(),
+            storage: Storage::default(),
             session: Session::default(),
             limits: Limits::default()
         }
     }
 }
 
+/// Given a path to a config toml file, attempt to read and set global static config
 pub fn init(path: &str) {
 
     let config: Config = match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).expect("config file is malformed"),
+        Ok(text) => match toml::from_str(&text) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("{path}: {e}");
+                std::process::exit(1);
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => write_default(path),
         Err(e) => panic!("could not read {path}: {e}"),
     };
@@ -38,6 +51,7 @@ pub fn init(path: &str) {
         std::process::exit(1);
     }
 
+    // Set global in memory config
     CONFIG.set(config).expect("config already initialized");
 }
 
@@ -74,6 +88,14 @@ impl Config {
             return Err("bind.port must be greater than 0".to_string());
         }
 
+        if self.storage.db_path.is_empty() {
+            return Err("storage.db_path must be set".to_string());
+        }
+
+        if self.storage.files_path.is_empty() {
+            return Err("storage.files_path must be set".to_string());
+        }
+
         if self.session.lifetime_days < 1 {
             return Err("session.lifetime_days must be at least 1".to_string());
         }
@@ -88,6 +110,16 @@ impl Config {
         range("password", self.limits.password_min, self.limits.password_max)?;
         range("room_name", 1, self.limits.room_name_max)?;
         range("message_body", 1, self.limits.message_body_max)?;
+    
+        if ByteSize::to_int(self.limits.file_bytes_max) <= 0 {
+            return Err("limits.file_bytes_max must be at least 1 byte".to_string());
+        }
+
+        // 32 is the ordinal CHECK in the schema, a larger value fails on insert
+        let attachments = self.limits.attachments_per_message_max;
+        if attachments < 1 || attachments > 32 {
+            return Err("limits.attachments_per_message_max must be between 1 and 32".to_string());
+        }
 
         Ok(())
     }
@@ -106,6 +138,7 @@ fn range(name: &str, min: usize, max: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Public accessor for static global config
 pub fn get() -> &'static Config {
     CONFIG.get().expect("config not initialized")
 }
@@ -124,6 +157,25 @@ impl Default for Bind {
         Bind {
             ip: "127.0.0.1".to_string(),
             port: 3000
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Storage {
+    // SQLite database file
+    pub db_path: String,
+
+    // Directory holding uploaded files, sharded by hash
+    pub files_path: String
+}
+
+impl Default for Storage {
+    fn default() -> Self {
+        Storage {
+            db_path: "chat.db".to_string(),
+            files_path: "files".to_string()
         }
     }
 }
@@ -159,7 +211,9 @@ pub struct Limits {
     pub room_name_max: usize,
     pub message_body_max: usize,
     pub password_min: usize,
-    pub password_max: usize
+    pub password_max: usize,
+    pub file_bytes_max: ByteSize,
+    pub attachments_per_message_max: usize
 }
 
 impl Default for Limits {
@@ -172,7 +226,9 @@ impl Default for Limits {
             room_name_max: 128,
             message_body_max: 8000,
             password_min: 8,
-            password_max: 128
+            password_max: 128,
+            file_bytes_max: ByteSize::from_int(25 * MEBIBYTE),
+            attachments_per_message_max: 10
         }
     }
 }

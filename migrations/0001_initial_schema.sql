@@ -11,11 +11,17 @@
 -- unstorable, so "unnamed" and "no body" each have one representation.
 -- Maximums live in the server config and are enforced by validate.rs.
 
+-- Content addressed: sha256 is both the dedup key and the path on disk, so
+-- identical bytes are stored once and shared by attachments, avatars and banners.
+--
+-- filename is the first uploader's name, and every later reference reads it here.
+-- mime is sniffed from the bytes at upload, which is why it carries no charset CHECK.
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
     sha256      BLOB NOT NULL UNIQUE CHECK (length(sha256) = 32),
+    filename    TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255),
     mime        TEXT NOT NULL CHECK (length(mime) BETWEEN 3 AND 255),
-    byte_size   INTEGER NOT NULL CHECK (byte_size >= 0),
+    byte_size   INTEGER NOT NULL CHECK (byte_size > 0),
     created_at  INTEGER NOT NULL
 ) STRICT;
 
@@ -197,21 +203,23 @@ CREATE TRIGGER messages_fts_update AFTER UPDATE OF body ON messages BEGIN
     INSERT INTO messages_fts(rowid, body) VALUES (new.seq, new.body);
 END;
 
+-- ordinal is the display order and half the primary key, so it also caps
+-- attachments per message at 32. The config limit must stay at or below that.
 CREATE TABLE message_attachments (
     message_id  BLOB NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     file_id     BLOB NOT NULL REFERENCES files(id),
     ordinal     INTEGER NOT NULL CHECK (ordinal >= 0 AND ordinal < 32),
-    filename    TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255),
     PRIMARY KEY (message_id, ordinal),
     UNIQUE (message_id, file_id)
 ) STRICT;
 
 CREATE INDEX message_attachments_file ON message_attachments(file_id);
 
+-- A user's library. The row keeps a file referenced while no message attaches it,
+-- so a fresh upload is never mistaken for an orphan.
 CREATE TABLE user_files (
     user_id   BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     file_id   BLOB NOT NULL REFERENCES files(id),
-    filename  TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255),
     added_at  INTEGER NOT NULL,
     PRIMARY KEY (user_id, file_id)
 ) STRICT;

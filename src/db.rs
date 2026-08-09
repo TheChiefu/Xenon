@@ -8,7 +8,6 @@ use crate::config;
 
 pub const DAY: i64 = 86400000; // Milliseconds
 
-
 pub async fn authenticate(
     conn: &mut sqlx::SqliteConnection,
     secret: &str,
