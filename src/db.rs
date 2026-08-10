@@ -187,6 +187,24 @@ pub async fn global_role(
     }
 }
 
+/// Rejects a user whose global role is outside the allowed set
+/// - conn: Connection to SQL DB
+/// - user_id: Who is performing the action
+/// - allowed: Roles permitted to perform it
+pub async fn require_role(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+    allowed: &[GlobalRole]
+) -> Result<()> {
+
+    let role = global_role(&mut *conn, user_id).await?;
+    if !allowed.contains(&role) {
+        return Err(AppError::Forbidden);
+    }
+
+    Ok(())
+}
+
 pub async fn room_member_ids(
     conn: &mut sqlx::SqliteConnection,
     room_id: Uuid,

@@ -1,4 +1,5 @@
 mod auth;
+mod files;
 mod messages;
 mod rooms;
 mod websockets;
@@ -6,7 +7,7 @@ mod websockets;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use axum::extract::{FromRef, FromRequestParts};
+use axum::extract::{DefaultBodyLimit, FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum::http;
 use axum::routing::{delete, get, post};
@@ -34,6 +35,11 @@ pub fn router(state: AppState) -> Router {
             post(messages::post_message)
             .get(messages::fetch_messages)
         )
+        .route("/files",
+            post(files::upload)
+            .layer(DefaultBodyLimit::max(files::max_body_bytes()))
+        )
+        .route("/files/{id}", get(files::download))
         .route("/ws", get(websockets::ws_handler))
         .with_state(state)
 }

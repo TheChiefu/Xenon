@@ -105,6 +105,37 @@ pub fn room_name(name: Option<&str>) -> Result<Option<&str>> {
     }
 }
 
+// Filesystem limit on one path component, so it stays out of the config
+const FILE_NAME_MAX: usize = 255;
+
+/// Strips any directory a client sent and returns the name alone
+pub fn file_name(path: &str) -> Result<String> {
+
+    // Find separators in path (client's OS is unknown match both slashes)
+    let index = match path.rfind(['/', '\\']) {
+        Some(i) => i + 1,
+        None => 0
+    };
+    let name = &path[index..];
+
+    // Strip any folder leading dots (ie up dir / same dir)
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(AppError::Validation(
+            format!("file name error: [{path}] names a directory")
+        ));
+    }
+
+    // If remaining filename is larger than OS limit, error
+    let len = name.chars().count();
+    if len > FILE_NAME_MAX {
+        return Err(AppError::Validation(
+            format!("file name error: longer than character limit [{FILE_NAME_MAX}]")
+        ));
+    }
+
+    Ok(name.to_string())
+}
+
 pub fn message_body(content: &str) -> Result<()> {
     let len = content.chars().count();
     let max = config::get().limits.message_body_max;

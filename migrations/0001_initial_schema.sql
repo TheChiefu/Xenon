@@ -19,7 +19,7 @@
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
     sha256      BLOB NOT NULL UNIQUE CHECK (length(sha256) = 32),
-    filename    TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255),
+    filename    TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255), -- File systems have a 255-byte limit on a single path components
     mime        TEXT NOT NULL CHECK (length(mime) BETWEEN 3 AND 255),
     byte_size   INTEGER NOT NULL CHECK (byte_size > 0),
     created_at  INTEGER NOT NULL

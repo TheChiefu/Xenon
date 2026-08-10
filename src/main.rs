@@ -25,6 +25,7 @@ async fn main() -> Result<()> {
     // Read configuration file (create defaults if not existing)
     let config_path = std::env::var("XENON_CONFIG").unwrap_or_else(|_| "config.toml".into());
     config::init(&config_path);
+    println!("{}", config::get().limits.file_bytes_max.to_int());
 
     // Setup tracing
     tracing_subscriber::fmt()

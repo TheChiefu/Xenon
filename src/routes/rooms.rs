@@ -42,7 +42,7 @@ pub async fn create_room(
     let creator_permissions = body.claim_all.then_some(Permissions::ALL);
 
     // Attempt to create room
-    let id = api::create_room(
+    let id = api::rooms::create_room(
         &pool,
         user_id,
         body.name.as_deref(),
@@ -60,7 +60,7 @@ pub async fn join_room(
     Path(room_id): Path<Uuid>
 ) -> Result<StatusCode> {
 
-    api::join_room(&pool, user_id, room_id).await?;
+    api::rooms::join_room(&pool, user_id, room_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -70,7 +70,7 @@ pub async fn leave_room (
     Path(room_id): Path<Uuid>
 ) -> Result<StatusCode> {
 
-    api::leave_room(&pool, user_id, room_id).await?;
+    api::rooms::leave_room(&pool, user_id, room_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -79,6 +79,6 @@ pub async fn list_rooms (
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<Room>>> {
 
-    let rooms = api::list_rooms(&pool, user_id).await?;
+    let rooms = api::rooms::list_rooms(&pool, user_id).await?;
     Ok(Json(rooms))
 }

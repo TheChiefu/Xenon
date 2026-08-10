@@ -81,10 +81,10 @@ impl ByteSize {
         // Attempt to convert the value to an integer
         let value = match digits.parse::<i64>() {
             Ok(value) => value,
-            Err(_) => return Err(format!("{input} is not a number followed by a unit"))
+            Err(e) => return Err(format!("[{input}] could not be parsed: {e}"))
         };
 
-        // Is no unit is found assume bytes
+        // If no unit is found assume bytes
         let parsed_unit = if parsed_unit.is_empty() {
             UNITS[UNITS.len()-1].0 // "B"
         } else {parsed_unit};
@@ -92,8 +92,7 @@ impl ByteSize {
         // Multiply read value by the unit value
         for (upper, _, bytes) in UNITS {
             if parsed_unit == upper {
-                // Plain multiplication wraps in a release build, turning an
-                // oversized value into a small one that passes every later check
+                // Check for overflows
                 return match value.checked_mul(bytes) {
                     Some(bytes) => Ok(ByteSize(bytes)),
                     None => Err(format!("{input} is larger than i64 holds"))
@@ -101,7 +100,7 @@ impl ByteSize {
             }
         }
 
-        // Reaching here means the unit matched nothing in the table
+        // Nothing matched in the UNIT table
         Err(format!("{parsed_unit} is not a known unit"))
     }
 }

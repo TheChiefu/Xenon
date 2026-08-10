@@ -22,12 +22,14 @@ pub async fn post_message(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
     author_id: Uuid,
-    body: &str,
+    body: Option<&str>,
     client_nonce: [u8; 16]
 ) -> Result<Posted> {
 
     // Format validation, before any write is in flight
-    validate::message_body(body)?;
+    if let Some(text) = body {
+        validate::message_body(text)?;
+    }
 
     let mut tx = pool.begin().await?;
 
@@ -89,7 +91,7 @@ pub async fn post_message(
             id: message_id,
             room_id,
             author_id,
-            body: Some(body.to_string()),
+            body: body.map(str::to_string),
             created_at: now,
             edited_at: None,
             deleted_at: None

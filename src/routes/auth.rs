@@ -29,7 +29,7 @@ pub async fn register(
     State(pool): State<SqlitePool>,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>)> {
-    let (id, token) = api::register(
+    let (id, token) = api::auth::register(
         &pool,
         &body.invite_code,
         &body.username,
@@ -57,7 +57,7 @@ pub async fn login(
     State(pool): State<SqlitePool>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
-    let token = api::login(&pool, &body.username, &body.password).await?;
+    let token = api::auth::login(&pool, &body.username, &body.password).await?;
     Ok(Json(LoginResponse { token }))
 }
 
@@ -82,14 +82,8 @@ pub async fn create_invite(
     let mut conn = pool.acquire().await?;
     
     // Check if user has permission to create an invite
-    let role = db::global_role(&mut conn, user_id).await?;
-    let allowed_roles = [
-        GlobalRole::Owner,
-        GlobalRole::Admin,
-    ];
-    if !allowed_roles.contains(&role) {
-        return Err(AppError::Forbidden);
-    }
+    let allowed = [GlobalRole::Owner, GlobalRole::Admin];
+    db::require_role(&mut conn, user_id, &allowed).await?;
 
     // Create invite code
     let max_uses = body.max_uses.unwrap_or(validate::INVITE_DEFAULT_MAX_USES);

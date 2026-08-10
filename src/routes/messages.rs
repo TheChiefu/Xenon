@@ -14,8 +14,10 @@ use crate::routes::{AuthUser, AppState, websockets};
 
 #[derive(Deserialize)]
 pub struct PostMessageRequest {
-    pub body: String,
+    pub body: Option<String>,
     pub client_nonce: String,
+    #[serde(default)]
+    pub attachments: Vec<Uuid>
 }
 
 #[derive(Clone, Serialize)]
@@ -65,25 +67,25 @@ pub async fn post_message (
     };
 
     // Attempt to post a message
-    let result = api::post_message(
+    let result = api::messages::post_message(
         &app_state.pool,
         room_id,
         user_id,
-        &body.body,
+        body.body.as_deref(),
         nonce
     ).await?;
 
     match result {
 
         // If message is posted, broadcast to all subscribed users in room
-        api::Posted::Created(msg) => {
+        api::messages::Posted::Created(msg) => {
             let response = MessageResponse::from(msg);
             websockets::broadcast_message(&app_state, room_id, &response).await;
             Ok((StatusCode::CREATED, Json(response)))
         },
 
         // If message is duplicate, return OK back to requester (no broadcast)
-        api::Posted::Duplicate(msg) => Ok((StatusCode::OK, Json(msg.into()))),
+        api::messages::Posted::Duplicate(msg) => Ok((StatusCode::OK, Json(msg.into()))),
     }
 }
 
@@ -104,14 +106,14 @@ pub async fn fetch_messages (
 
     // Get http query (?before, ?after) and convert it into a cursor 
     let cursor = match (query.after, query.before) {
-        (None, None) => api::Cursor::Latest,
-        (Some(seq), None) => api::Cursor::After(seq),
-        (None, Some(seq)) => api::Cursor::Before(seq),
+        (None, None) => api::messages::Cursor::Latest,
+        (Some(seq), None) => api::messages::Cursor::After(seq),
+        (None, Some(seq)) => api::messages::Cursor::Before(seq),
         (Some(_), Some(_)) => return Err(AppError::Validation(format!("cannot use before/after")))
     };
 
     // Attempt to fetch messages
-    let result = api::fetch_messages(&pool, user_id, room_id, cursor).await?;
+    let result = api::messages::fetch_messages(&pool, user_id, room_id, cursor).await?;
 
     // Convert returned vector of internal messages into vector of HTTP message responses
     let mut response = Vec::with_capacity(result.len());

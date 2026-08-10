@@ -1,5 +1,6 @@
 use std::fmt;
 use axum::Json;
+use axum::extract::multipart::MultipartError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
@@ -15,6 +16,7 @@ pub enum AppError {
     EmailTaken,
     OwnerExists,
     Forbidden,
+    NotFound,
     TooLarge(ByteSize),
     Db(sqlx::Error),
     Hash(argon2::password_hash::Error),
@@ -34,8 +36,9 @@ impl fmt::Display for AppError {
             AppError::EmailTaken => write!(f, "email already in use"),
             AppError::OwnerExists => write!(f, "server owner already exists"),
             AppError::Forbidden => write!(f,"action not allowed"),
-            AppError::TooLarge(bytes) => write!(f, "content exceeds the {bytes} limit"),
+            AppError::TooLarge(bytes) => write!(f, "content exceeds {bytes} file limit"),
             AppError::Io(e) => write!(f, "i/o error: {e}"),
+            AppError::NotFound => write!(f, "not found"),
         }
     }
 }
@@ -84,12 +87,22 @@ impl IntoResponse for AppError {
             AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::TooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
+            AppError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
+
+            // A rejected request body reaches server as an io error
+            AppError::Io(e) => match multipart_rejection(e) {
+                Some(rejection) => rejection,
+                None => {
+                    let id = Uuid::now_v7();
+                    tracing::error!("internal error {id}: {self}");
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("internal server error ({id})"))
+                }
+            },
 
             // Never reaches client
             AppError::OwnerExists |
             AppError::Db(_) |
-            AppError::Hash(_) |
-            AppError::Io(_) => 
+            AppError::Hash(_) =>
             {
                 let id = Uuid::now_v7();
                 tracing::error!("internal error {id}: {self}");
@@ -124,4 +137,12 @@ pub fn unique_violation(e: sqlx::Error) -> AppError {
     };
 
     mapped.unwrap_or(AppError::Db(e))
+}
+
+/// Recovers the status axum picked for a rejected body, such as 413 when the
+/// route's DefaultBodyLimit was exceeded
+fn multipart_rejection(e: &std::io::Error) -> Option<(StatusCode, String)> {
+    let source = e.get_ref()?;
+    let multipart = source.downcast_ref::<MultipartError>()?;
+    Some((multipart.status(), multipart.body_text()))
 }

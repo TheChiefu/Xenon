@@ -37,18 +37,9 @@ pub async fn create_room(
     // Open transaction
     let mut tx = pool.begin().await?;
 
-    // Role lookup
-    let role = db::global_role(&mut *tx, creator_id).await?;
-    let allowed_roles = [
-        GlobalRole::Owner,
-        GlobalRole::Admin,
-        GlobalRole::Member
-    ];
-
     // Check if user can create a room
-    if !allowed_roles.contains(&role){
-        return Err(AppError::Forbidden);
-    }
+    let allowed = [GlobalRole::Owner, GlobalRole::Admin, GlobalRole::Member];
+    db::require_role(&mut *tx, creator_id, &allowed).await?;
 
     // Create room
     let now = utils::now_ms();

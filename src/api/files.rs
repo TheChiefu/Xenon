@@ -71,6 +71,48 @@ where
     Ok(stored)
 }
 
+/// Given a file ID attempt to fetch it from the DB, returns a reader stream
+pub async fn fetch(
+    pool: &SqlitePool,
+    file_id: Uuid,
+) -> Result<(File, tokio::fs::File)> {
+
+    // Select file from table by id
+    let mut conn = pool.acquire().await?;
+    let f = sqlx::query_as::<_, File>(
+        "
+        SELECT id, sha256, filename, mime, byte_size, created_at
+        FROM files
+        WHERE id = ?1
+        "
+    )
+    .bind(file_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    // No file found, report as not found error
+    let Some(file) = f else  {
+        return Err(AppError::NotFound);
+    };
+
+    // Rebuild path based on SHA256
+    let hex_sha = hex::encode(&file.sha256);
+    let directory = create_shard_path(&config::get().storage.files_path, &hex_sha);
+    let path = directory.join(&hex_sha);
+
+    // Get file reader handle
+    match tokio::fs::File::open(&path).await {
+        Ok(handle) => Ok((file, handle)),
+        Err(e) => {
+            // Expected a "files" row, but has no bytes on disk (storage inconsistency)
+            if e.kind() == std::io::ErrorKind::NotFound {
+                tracing::error!("file {file_id} has no bytes at {}", path.display());
+            }
+            Err(AppError::Io(e))
+        }
+    }
+}
+
 // Helper Methods //
 
 /// Creates the shard directory and moves the temp file into it (via rename)
@@ -98,7 +140,7 @@ where
     let mut tmp_file = tokio::fs::File::create(tmp_path).await?;
 
     // Setup reader and metadata properties
-    let mut buffer = [0u8; 16384]; // 16KiB chunks
+    let mut buffer = [0u8; 65536]; // 64KiB chunks
     let mut read_bytes: i64 = 0;
     let mut hasher = Sha256::new();
     let mut mime = "application/octet-stream";
@@ -114,6 +156,8 @@ where
         if read_bytes == 0 {
             if let Some(val) = infer::get(chunk) {
                 mime = val.mime_type();
+            } else if is_utf8_text(chunk) {
+                mime = "text/plain";
             }
         }
 
@@ -221,4 +265,19 @@ async fn insert_file(
             created_at: now
         }
     ))
+}
+
+/// If text has no magic bytes to infer,
+/// fallback to seeing if bytes are from text file
+fn is_utf8_text(chunk: &[u8]) -> bool {
+
+    // Check for NULs
+    if chunk.contains(&0) {
+        return false;
+    }
+
+    match std::str::from_utf8(chunk) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none()
+    }
 }
