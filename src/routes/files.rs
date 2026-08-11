@@ -23,7 +23,6 @@ pub struct FileResponse {
     pub filename: String,
     pub mime: String,
     pub byte_size: i64,
-    pub created_at: i64
 }
 
 impl From<File> for FileResponse {
@@ -33,7 +32,6 @@ impl From<File> for FileResponse {
             filename: f.filename,
             mime: f.mime,
             byte_size: f.byte_size,
-            created_at: f.created_at
         } 
     }
 }

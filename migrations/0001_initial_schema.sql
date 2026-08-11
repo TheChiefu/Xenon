@@ -85,6 +85,7 @@ CREATE TABLE rooms (
     visibility          INTEGER NOT NULL CHECK (visibility IN (0, 1, 2)),
     default_permissions INTEGER NOT NULL CHECK (default_permissions >= -1),
     created_at          INTEGER NOT NULL,
+    -- Incremented on edit and tombstone
     mutation_seq        INTEGER NOT NULL DEFAULT 0 CHECK (mutation_seq >= 0)
 ) STRICT;
 

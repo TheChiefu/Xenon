@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::api;
 use crate::error::{AppError, Result};
 use crate::models::Message;
+use crate::routes::files::FileResponse;
 use crate::routes::{AuthUser, AppState, websockets};
 
 // Post Message //
@@ -30,10 +31,12 @@ pub struct MessageResponse {
     pub created_at: i64,
     pub edited_at: Option<i64>,
     pub deleted_at: Option<i64>,
+    pub attachments: Vec<FileResponse>
 }
 
-impl From<Message> for MessageResponse {
-    fn from(m: Message) -> Self {
+impl MessageResponse {
+
+    pub fn new(m: Message, attachments: Vec<FileResponse>) -> Self {
         Self {
             seq: m.seq,
             id: m.id,
@@ -43,6 +46,7 @@ impl From<Message> for MessageResponse {
             created_at: m.created_at,
             edited_at: m.edited_at,
             deleted_at: m.deleted_at,
+            attachments
         }
     }
 }
@@ -72,21 +76,28 @@ pub async fn post_message (
         room_id,
         user_id,
         body.body.as_deref(),
-        nonce
+        nonce,
+        &body.attachments
     ).await?;
 
-    match result {
+    let (status, message) = match result {
+        api::messages::Posted::Created(msg) => (StatusCode::CREATED, msg),
+        api::messages::Posted::Duplicate(msg) => (StatusCode::OK, msg),
+    };
 
-        // If message is posted, broadcast to all subscribed users in room
-        api::messages::Posted::Created(msg) => {
-            let response = MessageResponse::from(msg);
-            websockets::broadcast_message(&app_state, room_id, &response).await;
-            Ok((StatusCode::CREATED, Json(response)))
-        },
+    // Get all attachments in message and attach to response
+    let mut conn = app_state.pool.acquire().await?;
+    let files = api::files::for_message(&mut *conn, message.id).await?;
+    let attachments = files.into_iter().map(FileResponse::from).collect();
+    let response = MessageResponse::new(message, attachments);
 
-        // If message is duplicate, return OK back to requester (no broadcast)
-        api::messages::Posted::Duplicate(msg) => Ok((StatusCode::OK, Json(msg.into()))),
+    // If message is posted, broadcast to all subscribed users in room
+    if status == StatusCode::CREATED {
+        websockets::broadcast_message(&app_state, room_id, &response).await;
     }
+
+    // Message is duplicate (no broadcast)
+    Ok((status, Json(response)))
 }
 
 // Fetch Messages //
@@ -117,8 +128,9 @@ pub async fn fetch_messages (
 
     // Convert returned vector of internal messages into vector of HTTP message responses
     let mut response = Vec::with_capacity(result.len());
-    for message in result {
-        response.push(MessageResponse::from(message));
+    for (message, files) in result {
+        let attachments = files.into_iter().map(FileResponse::from).collect();
+        response.push(MessageResponse::new(message, attachments));
     }
     
     Ok(Json(response))
