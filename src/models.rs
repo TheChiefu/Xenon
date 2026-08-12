@@ -80,6 +80,17 @@ impl Default for Permissions {
     fn default() -> Self { Self::NONE }
 }
 
+// Users
+
+/// Public subset of a user row: safe to hand to any authenticated caller,
+/// unlike the full row (password_hash, email, global_role, ...)
+#[derive(sqlx::FromRow, Serialize)]
+pub struct UserSummary {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: String,
+}
+
 // Room
 
 #[derive(sqlx::FromRow, Serialize)]

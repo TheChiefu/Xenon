@@ -11,3 +11,6 @@ chat.db-wal
 # Xenon Files
 config.toml
 /files/*
+
+# Testing files
+/web/*

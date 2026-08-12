@@ -82,3 +82,12 @@ pub async fn list_rooms (
     let rooms = api::rooms::list_rooms(&pool, user_id).await?;
     Ok(Json(rooms))
 }
+
+pub async fn list_public_rooms (
+    AuthUser(user_id): AuthUser,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<Vec<Room>>> {
+
+    let rooms = api::rooms::list_public_rooms(&pool, user_id).await?;
+    Ok(Json(rooms))
+}

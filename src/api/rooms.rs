@@ -298,3 +298,30 @@ pub async fn list_rooms(
     Ok(rooms)
 
 }
+
+/// Public rooms the user has not already joined, so "list_rooms" and this stay
+/// disjoint: a room only ever needs to appear in one of the two lists.
+pub async fn list_public_rooms(
+    pool: &sqlx::SqlitePool,
+    user_id: Uuid
+) -> Result<Vec<Room>> {
+
+    let mut conn = pool.acquire().await?;
+
+    let rooms: Vec<Room> = sqlx::query_as(
+        "
+        SELECT r.id, r.name, r.visibility, r.default_permissions, r.created_at, r.mutation_seq
+        FROM rooms r
+        WHERE r.visibility = ?1
+            AND NOT EXISTS (
+                SELECT 1 FROM room_access a WHERE a.room_id = r.id AND a.user_id = ?2
+            )
+        "
+    )
+    .bind(Visibility::Public)
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(rooms)
+}

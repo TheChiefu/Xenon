@@ -2,6 +2,7 @@ mod auth;
 mod files;
 mod messages;
 mod rooms;
+mod users;
 mod websockets;
 
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ pub fn router(state: AppState) -> Router {
             post(rooms::create_room)
             .get(rooms::list_rooms)
         )
+        .route("/rooms/public", get(rooms::list_public_rooms))
         .route("/rooms/{id}/join", post(rooms::join_room))
         .route("/rooms/{id}/members/me", delete(rooms::leave_room))
         .route("/rooms/{id}/messages",
@@ -44,6 +46,7 @@ pub fn router(state: AppState) -> Router {
             .layer(DefaultBodyLimit::max(files::max_body_bytes()))
         )
         .route("/files/{id}", get(files::download))
+        .route("/users/{id}", get(users::get_user))
         .route("/ws", get(websockets::ws_handler))
         .with_state(state)
 }
