@@ -37,7 +37,10 @@ pub async fn ws_handler(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, user_id, state))
+    // A handshake offering subprotocols only succeeds if the server names one
+    // of them back. Echo "Bearer", never the token that follows it.
+    ws.protocols(["Bearer"])
+        .on_upgrade(move |socket| handle_socket(socket, user_id, state))
 }
 
 /// Pushes server notifications to one connected client until they disconnect.

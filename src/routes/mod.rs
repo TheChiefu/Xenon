@@ -51,7 +51,8 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// The caller's id, resolved from the Authorization header.
+/// The caller's id, resolved from the Authorization header, or from the
+/// offered subprotocols on a WebSocket handshake.
 /// Declared as a handler parameter, so axum authenticates before the body runs
 pub struct AuthUser(pub Uuid);
 
@@ -72,24 +73,43 @@ where
 
         // Repeated headers are joined by HTTP, so two values means two credentials were presented
         // Reject if headers are combined, rather than pick one
-        let token = match (first, second) {
+        let token: String = match (first, second) {
             (Some(header), None) => header
                 .to_str()
                 .ok()
                 .and_then(|value| value.strip_prefix("Bearer "))
+                .ok_or(AppError::InvalidCredentials)?
+                .to_string(),
+
+            // WebSocket handshakes carry the token as a subprotocol, since a
+            // browser cannot set Authorization on one
+            (None, None) => parts.headers.get(http::header::SEC_WEBSOCKET_PROTOCOL)
+                .and_then(token_from_protocol)
                 .ok_or(AppError::InvalidCredentials)?,
+
             _ => return Err(AppError::InvalidCredentials),
         };
 
         // Authenticate
         let pool = SqlitePool::from_ref(state);
         let mut conn = pool.acquire().await?;
-        let user_id = db::authenticate(&mut conn, token)
+        let user_id = db::authenticate(&mut conn, &token)
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
         Ok(AuthUser(user_id))
     }
+}
+
+/// Reads the session token from a handshake's offered subprotocols, which the
+/// client sends as `Bearer, <token>` to mirror the Authorization header.
+fn token_from_protocol(header: &http::HeaderValue) -> Option<String> {
+    let mut offered = header.to_str().ok()?.split(',').map(str::trim);
+    if offered.next()? != "Bearer" {
+        return None;
+    }
+    let token = offered.next()?;
+    (!token.is_empty()).then(|| token.to_string())
 }
 
 // App State //
