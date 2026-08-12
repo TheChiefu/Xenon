@@ -15,6 +15,18 @@ Basic Security for:
 | Password Hashing| Argon2id |
 | Session Tokens | OsRng + SHA256 |
 
+## Configuration
+A `config.toml` is written alongside server on first run with defaults.
+It covers:
+- Bind address
+- Database (.db) location
+- Uploaded "files" location
+- Length of session lifetime
+- Limits (such as on usernames, display name, message, etc)
+
+By default the `config.toml` file is expected to be at the same directory as the server.
+To use a different directory on boot, set an environment variable `XENON_CONFIG` with the desired location.
+
 
 ## Plan
 - [x] Create Database model/schema (first pass)
@@ -26,8 +38,13 @@ Basic Security for:
     - [x] Messages: post, paginated fetch
 - [x] Get sockets functional
     - [x] Live message broadcast to everyone in a room
-- [ ] File uploads and attachments
-- [ ] Message (Search, Read state, Deletion)
+- [x] File uploads and attachments
+    - [x] Streamed uploads, deduplicated by content hash
+    - [x] Attachments on messages
+- [ ] Messages
+    - [x] Edit and delete
+    - [ ] Search
+    - [ ] Read state
 - [ ] Online presence and typing indicators
 - [ ] Game presence (Xbox/Steam)
 - [ ] Rate limiting

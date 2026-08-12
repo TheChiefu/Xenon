@@ -103,6 +103,12 @@ pub async fn post_message(
     Ok(posted)
 }
 
+/// Retrieves vector of messages (and possible attachments) within
+/// a given cursor range and room to a specific user.
+/// - pool: To get connections from
+/// - user_id: Who to fetch the messages for
+/// - room_id: What room to get messages from
+/// - cursor: Range of messages to look for (before, after, or latest)
 pub async fn fetch_messages(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
@@ -173,6 +179,134 @@ pub async fn fetch_messages(
     Ok(result)
 }
 
+/// Delete a message within a room
+/// - pool: To get connections from
+/// - user_id: Who is attempting to delete a message
+/// - room_id: Where the message is located
+/// - message_id: What message to delete by id
+pub async fn delete_message(
+    pool: &sqlx::SqlitePool,
+    user_id: Uuid,
+    room_id: Uuid,
+    message_id: Uuid,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let author_id = fetch_author(&mut tx, message_id, room_id).await?;
+
+    // If author has permission to delete
+    let perms = db::effective_permissions(&mut *tx, user_id, room_id).await?;
+    if !can_delete_message(perms, user_id, author_id) {
+        return Err(AppError::Forbidden);
+    }
+
+    // Tombstone the message
+    let now = utils::now_ms();
+    let tombstone_msg = sqlx::query(
+        "
+        UPDATE messages
+        SET body = NULL, deleted_at = ?1
+        WHERE id = ?2 AND deleted_at IS NULL
+        "
+    )
+    .bind(now)
+    .bind(message_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Message already deleted, so nothing below should run
+    if tombstone_msg.rows_affected() == 0 {
+        return Ok(())
+    }
+
+    // Clear it's attachments
+    sqlx::query("DELETE FROM message_attachments WHERE message_id = ?1")
+    .bind(message_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Bump the room
+    sqlx::query("UPDATE rooms SET mutation_seq = mutation_seq + 1 WHERE id = ?1")
+    .bind(room_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Finish Transaction
+    tx.commit().await?;
+
+    Ok(())
+
+}
+
+pub async fn edit_message(
+    pool: &sqlx::SqlitePool,
+    user_id: Uuid,
+    room_id: Uuid,
+    message_id: Uuid,
+    body: Option<&str>,
+) -> Result<i64> {
+
+    if let Some(text) = body {
+        validate::message_body(text)?;
+    }
+
+    let mut tx = pool.begin().await?;
+
+    // Check author
+    let author_id = fetch_author(&mut tx, message_id, room_id).await?;
+
+    // Does user have permission to edit the message
+    if author_id != user_id {
+        return Err(AppError::Forbidden);
+    }
+
+    // If there is no body, verify attachments are present
+    if body.is_none() {
+        // Check if original message has attachments
+        let has_attachments: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE message_id = ?1)"
+        )
+        .bind(message_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if !has_attachments {
+            let err = "edited message body cannot be empty and have no attachments".to_string();
+            return Err(AppError::Validation(err))
+        }
+    }
+
+    // Update message
+    let now = utils::now_ms();
+    let edited = sqlx::query (
+        "
+        UPDATE messages
+        SET body = ?1, edited_at = ?2
+        WHERE id = ?3 AND deleted_at IS NULL
+        "
+    )
+    .bind(body)
+    .bind(now)
+    .bind(message_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // The guard above matched nothing, so the message is already a tombstone
+    if edited.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Update Mutation Seqquence
+    sqlx::query("UPDATE rooms SET mutation_seq = mutation_seq + 1 WHERE id = ?1")
+        .bind(room_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // Commit transaction
+    tx.commit().await?;
+
+    Ok(now)
+
+}
 
 
 // Helper Methods //
@@ -236,6 +370,35 @@ async fn fetch_by_nonce(
     Ok(message)
 }
 
+/// Reads a message's author
+/// - conn: Connection to SQL DB
+/// - message_id: Message to look up
+/// - room_id: Room the message must belong to
+async fn fetch_author(
+    conn: &mut sqlx::SqliteConnection,
+    message_id: Uuid,
+    room_id: Uuid,
+) -> Result<Uuid> {
+
+    let author_id: Option<Uuid> = sqlx::query_scalar(
+        "
+        SELECT author_id
+        FROM messages
+        WHERE id = ?1 AND room_id = ?2
+        "
+    )
+    .bind(message_id)
+    .bind(room_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    let Some(author_id) = author_id else {
+        return Err(AppError::NotFound);
+    };
+
+    Ok(author_id)
+}
+
 /// Links files to a message, ordered as the client sent them
 /// - conn: Connection to SQL DB
 /// - message_id: Message the files belong to
@@ -294,4 +457,23 @@ fn can_post(perms: Option<Permissions>, has_attachments: bool) -> bool {
     }
 
     true
+}
+
+fn can_delete_message(perms: Option<Permissions>, user_id: Uuid, author_id: Uuid) -> bool {
+
+    let Some(perms) = perms else {
+        return false;
+    };
+
+    // If the user is the same as author (self delete)
+    if user_id == author_id {
+        return true;
+    }
+
+    // If user is not the author (delete other's message)
+    if !perms.has(Permission::DeleteMsg) {
+        return false;
+    }
+
+    return true;
 }

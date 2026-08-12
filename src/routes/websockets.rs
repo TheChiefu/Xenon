@@ -21,7 +21,9 @@ const CAPACITY: usize = 32;
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
-    Message { room_id: Uuid, message: MessageResponse}
+    Message { room_id: Uuid, message: MessageResponse},
+    MessageDeleted {room_id: Uuid, message_id: Uuid},
+    MessageEdited {room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64}
 }
 
 /// Upgrades an HTTP request into a WebSocket.
@@ -91,16 +93,18 @@ async fn handle_socket(
 
 }
 
-pub async fn broadcast_message(
+/// Sends an event to every member of a room with an open socket.
+/// Failures are logged rather than returend, so a broadcast doesn't fail on a request.
+/// - state: Pool and socket registry
+/// - room_id: Room whose members recevive the event
+/// - event: What to broadcast
+pub async fn broadcast(
     state: &AppState,
     room_id: Uuid,
-    message: &MessageResponse
+    event: ServerEvent
 ) {
 
-    // Clone message for server event (broadcast)
-    let event = ServerEvent::Message {room_id, message: message.clone()};
-
-    // Seralize message for broadcast
+    // Seralize event for broadcast
     match serde_json::to_string(&event) {
         Ok(payload) => {
 
@@ -140,6 +144,6 @@ pub async fn broadcast_message(
         },
 
         // Could not serialize
-        Err(e) => tracing::error!("failed to serialize message event: {e}"),
+        Err(e) => tracing::error!("failed to serialize server event: {e}"),
     };
 }

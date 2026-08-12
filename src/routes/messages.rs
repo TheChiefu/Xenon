@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, request};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -9,6 +9,7 @@ use crate::api;
 use crate::error::{AppError, Result};
 use crate::models::Message;
 use crate::routes::files::FileResponse;
+use crate::routes::websockets::ServerEvent;
 use crate::routes::{AuthUser, AppState, websockets};
 
 // Post Message //
@@ -93,7 +94,8 @@ pub async fn post_message (
 
     // If message is posted, broadcast to all subscribed users in room
     if status == StatusCode::CREATED {
-        websockets::broadcast_message(&app_state, room_id, &response).await;
+        let event = ServerEvent::Message { room_id, message: response.clone() };
+        websockets::broadcast(&app_state, room_id, event).await;
     }
 
     // Message is duplicate (no broadcast)
@@ -108,6 +110,7 @@ pub struct FetchQuery {
     pub before: Option<i64>,
 }
 
+/// Given a room and query range, fetch all messages within it
 pub async fn fetch_messages (
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
@@ -134,4 +137,56 @@ pub async fn fetch_messages (
     }
     
     Ok(Json(response))
+}
+
+/// Delete a message by id in a room
+pub async fn delete_message (
+    AuthUser(user_id): AuthUser,
+    State(app_state): State<AppState>,
+    Path((room_id, message_id)): Path<(Uuid, Uuid)>
+) -> Result<StatusCode> {
+    api::messages::delete_message(&app_state.pool, user_id, room_id, message_id).await?;
+
+    let event = ServerEvent::MessageDeleted { room_id, message_id };
+    websockets::broadcast(&app_state, room_id, event).await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+//  Edit Messages //
+
+#[derive(Deserialize)]
+pub struct EditMessageRequest {
+    pub body: Option<String>
+}
+
+#[derive(Serialize)]
+pub struct EditMessageResponse {
+    pub edited_at: i64
+}
+
+/// Update a message by id in a room
+/// Do delta update, only update what changed broadcast "edited_at"
+pub async fn update_message (
+    AuthUser(user_id): AuthUser,
+    State(app_state): State<AppState>,
+    Path((room_id, message_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<EditMessageRequest>
+) -> Result<Json<EditMessageResponse>> {
+
+    let edited_at = api::messages::edit_message(
+        &app_state.pool,
+        user_id,
+        room_id,
+        message_id,
+        request.body.as_deref(),
+    ).await?;
+
+    let event = ServerEvent::MessageEdited {
+        room_id, message_id, body: request.body, edited_at
+    };
+    websockets::broadcast(&app_state, room_id, event).await;
+
+    Ok(Json(EditMessageResponse { edited_at }))
+
 }

@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use axum::extract::{DefaultBodyLimit, FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum::http;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
@@ -34,6 +34,10 @@ pub fn router(state: AppState) -> Router {
         .route("/rooms/{id}/messages",
             post(messages::post_message)
             .get(messages::fetch_messages)
+        )
+        .route("/rooms/{id}/messages/{message_id}",
+            delete(messages::delete_message)
+            .patch(messages::update_message)
         )
         .route("/files",
             post(files::upload)
