@@ -5,7 +5,8 @@ use uuid::Uuid;
 /// !!! Permanent !!!
 /// Never reuse or renumber a retired variant's number once rows exist
 /// Encodes as integer in DB
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[repr(i8)]
 pub enum GlobalRole {
     Owner = 0,

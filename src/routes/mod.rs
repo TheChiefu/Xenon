@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/files/{id}", get(files::download))
         .route("/me", get(users::get_me))
         .route("/users/{id}", get(users::get_user))
+        .route("/users/{id}/role", patch(users::set_role))
         .route("/ws", get(websockets::ws_handler))
         .with_state(state)
 }

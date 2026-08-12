@@ -165,6 +165,8 @@ pub async fn effective_permissions(
 
 
 /// Check if a user has global admin permissions
+/// - conn: Connection to SQL DB
+/// - user_id: User in question to check
 pub async fn global_role(
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid
@@ -205,6 +207,9 @@ pub async fn require_role(
     Ok(())
 }
 
+/// List members of a given room
+/// - conn: Connection to SQL DB
+/// - room_id: Room to look in
 pub async fn room_member_ids(
     conn: &mut sqlx::SqliteConnection,
     room_id: Uuid,
@@ -222,4 +227,28 @@ pub async fn room_member_ids(
     .await?;
 
     Ok(members)
+}
+
+/// Write a user's global role
+/// Returns false when no user is matched
+pub async fn set_global_role(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+    role: GlobalRole,
+) -> Result<bool> {
+
+    let updated = sqlx::query(
+        "
+        UPDATE users SET global_role = ?1
+        WHERE id =?1 AND deleted_at IS NULL
+        "
+    )
+    .bind(role)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .map_err(error::unique_violation)?
+    .rows_affected();
+
+    Ok(updated == 1)
 }
