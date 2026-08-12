@@ -240,7 +240,7 @@ pub async fn set_global_role(
     let updated = sqlx::query(
         "
         UPDATE users SET global_role = ?1
-        WHERE id =?1 AND deleted_at IS NULL
+        WHERE id =?2 AND deleted_at IS NULL
         "
     )
     .bind(role)
