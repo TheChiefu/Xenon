@@ -46,6 +46,7 @@ pub fn router(state: AppState) -> Router {
             .layer(DefaultBodyLimit::max(files::max_body_bytes()))
         )
         .route("/files/{id}", get(files::download))
+        .route("/me", get(users::get_me))
         .route("/users/{id}", get(users::get_user))
         .route("/ws", get(websockets::ws_handler))
         .with_state(state)

@@ -17,3 +17,13 @@ pub async fn get_user(
     let user = api::users::get_user(&pool, user_id).await?;
     Ok(Json(user))
 }
+
+/// The caller's own profile (get user info)
+pub async fn get_me(
+    AuthUser(user_id): AuthUser,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<UserSummary>> {
+
+    let user = api::users::get_user(&pool, user_id).await?;
+    Ok(Json(user))
+}
