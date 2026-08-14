@@ -30,22 +30,20 @@ pub enum Visibility {
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum Permission {
-    DeleteRoom = 0,     // Delete room
-    Rename = 1,         // Edit room name
-    Manage = 2,         // Permissions
-    Invite = 3,         // Create invites to room
-    Nickname = 4,       // Per room display name (deferred)
-    Post = 5,           // Allows user to send messages
-    DeleteMsg = 6,      // Delete other's messages
-    Attach = 7,         // File attachments
-    Pin = 8,            // Pin specific message to pin tab
-    Suspend = 9,        // Suspend users from room (time-limited; no permanent ban)
-    Commands = 10,      // Use slash commands (unimplemented)
-    Connect = 11,       // Join voice chat (unimplemented)
-    Speak = 12,         // Can speak in voice chat (unimplemented)
-    Mute = 13,          // Mute others in voice chat (unimplemented)
-    Video = 14,         // Show webcam video (unimplemented)
-    Screenshare = 15,   // Share screen (unimplemented)
+    Post = 0,           // Allows user to send messages
+    Attach = 1,         // File attachments
+    DeleteMsg = 2,      // Delete other's messages
+    DeleteRoom = 3,     // Delete room
+    Invite = 4,         // Create invites to room
+    Manage = 5,         // Permissions
+    Rename = 6,         // Edit room name
+    Suspend = 7,        // Remove a user from a room, with or without an expiry
+    Commands = 8,       // Use slash commands (unimplemented)
+    Connect = 9,        // Join voice chat (unimplemented)
+    Speak = 10,         // Can speak in voice chat (unimplemented)
+    Mute = 11,          // Mute others in voice chat (unimplemented)
+    Video = 12,         // Show webcam video (unimplemented)
+    Screenshare = 13,   // Share screen (unimplemented)
 }
 const _: () = assert!((Permission::Screenshare as u8) < 63);
 

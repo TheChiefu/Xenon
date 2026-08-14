@@ -299,8 +299,8 @@ pub async fn list_rooms(
 
 }
 
-/// Public rooms the user has not already joined, so "list_rooms" and this stay
-/// disjoint: a room only ever needs to appear in one of the two lists.
+/// Discoverable rooms the user has not already joined
+/// (Public and Locked)
 pub async fn list_public_rooms(
     pool: &sqlx::SqlitePool,
     user_id: Uuid
@@ -312,13 +312,14 @@ pub async fn list_public_rooms(
         "
         SELECT r.id, r.name, r.visibility, r.default_permissions, r.created_at, r.mutation_seq
         FROM rooms r
-        WHERE r.visibility = ?1
+        WHERE r.visibility IN (?1, ?2)
             AND NOT EXISTS (
-                SELECT 1 FROM room_access a WHERE a.room_id = r.id AND a.user_id = ?2
+                SELECT 1 FROM room_access a WHERE a.room_id = r.id AND a.user_id = ?3
             )
         "
     )
     .bind(Visibility::Public)
+    .bind(Visibility::Locked)
     .bind(user_id)
     .fetch_all(&mut *conn)
     .await?;
