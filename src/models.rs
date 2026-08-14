@@ -114,23 +114,6 @@ pub struct Message {
     pub deleted_at: Option<i64>
 }
 
-/// Check if a user can delete a message:
-/// 
-/// - perm: An actor's permission bitmask (allowed permissions)
-/// - actor_id: Who is performing the action
-/// - target_id: Who is affected by the action
-pub fn can_delete_message(perm: Permissions, actor_id: Uuid, target_id: Uuid) -> bool {
-    if actor_id == target_id {
-        return true;
-    }
-
-    if perm.has(Permission::DeleteMsg) {
-        return true;
-    }
-
-    return false
-}
-
 #[derive(sqlx::FromRow)]
 pub struct File {
     pub id: Uuid,
