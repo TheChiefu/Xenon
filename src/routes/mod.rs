@@ -25,7 +25,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/register", post(auth::register))
         .route("/login", post(auth::login))
-        .route("/invite", post(auth::create_invite))
+        .route("/register-code", post(auth::create_registration_code))
         .route("/rooms",
             post(rooms::create_room)
             .get(rooms::list_rooms)

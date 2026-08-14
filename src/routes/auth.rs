@@ -73,7 +73,7 @@ pub struct CreateInviteResponse {
     pub code: String,
 }
 
-pub async fn create_invite(
+pub async fn create_registration_code(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
     Json(body): Json<CreateInviteRequest>,
