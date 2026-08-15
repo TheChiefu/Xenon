@@ -80,6 +80,10 @@ pub async fn create_room(
     Ok(room_id)
 }
 
+/// Grant a user access to a room
+/// - pool: Pool of SQL Connections
+/// - user_id: User joining
+/// - room_id: Room being joined
 pub async fn join_room(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
@@ -175,6 +179,9 @@ fn pick_promotion(members: &[(Uuid, Permissions)]) -> Option<Uuid> {
 /// The single lifecycle path: voluntary leave, removal, and account deletion
 /// all land here. Takes a connection rather than a pool so the caller owns the
 /// transaction, since account deletion removes a user from every room at once.
+/// - conn: Connection to SQL DB
+/// - user_id: User being removed
+/// - room_id: Room to remove them from
 pub async fn remove_member (
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid,
@@ -190,9 +197,9 @@ pub async fn remove_member (
     .execute(&mut *conn)
     .await?;
 
-    // They weren't a member, exit early
+    // No membership to remove (404)
     if result.rows_affected() == 0 {
-        return Err(AppError::Forbidden)
+        return Err(AppError::NotFound)
     }
 
     // There were a member, remove from the read state
@@ -263,7 +270,10 @@ pub async fn remove_member (
     Ok(())
 }
 
-/// Voluntary leave. Owns the transaction that `remove_member` runs in.
+/// Remove given user from a room
+/// - pool: Pool of SQL Connections
+/// - user_id: User to remove from room
+/// - room_id: Room to remove user from
 pub async fn leave_room(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
@@ -277,13 +287,17 @@ pub async fn leave_room(
     Ok(())
 }
 
-pub async fn list_rooms(
+/// Get list of rooms available to user
+/// - pool: Pool of SQL Connections
+/// - user_id: ID of user to filter on
+pub async fn list_my_rooms(
     pool: &sqlx::SqlitePool,
     user_id: Uuid
 ) -> Result<Vec<Room>> {
 
     let mut conn = pool.acquire().await?;
 
+    // Get list based on user's room access
     let rooms: Vec<Room> = sqlx::query_as(
         "
         SELECT r.id, r.name, r.visibility, r.default_permissions, r.created_at, r.mutation_seq
@@ -299,11 +313,14 @@ pub async fn list_rooms(
 
 }
 
-/// Discoverable rooms the user has not already joined
-/// (Public and Locked)
-pub async fn list_public_rooms(
+/// One page of the discoverable rooms (Public and Locked)
+/// - pool: Pool of SQL Connections
+/// - after: Room id to page from, None for the first page
+/// - limit: How many rooms to return
+pub async fn list_discoverable_rooms(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid
+    after: Option<Uuid>,
+    limit: i64,
 ) -> Result<Vec<Room>> {
 
     let mut conn = pool.acquire().await?;
@@ -313,14 +330,15 @@ pub async fn list_public_rooms(
         SELECT r.id, r.name, r.visibility, r.default_permissions, r.created_at, r.mutation_seq
         FROM rooms r
         WHERE r.visibility IN (?1, ?2)
-            AND NOT EXISTS (
-                SELECT 1 FROM room_access a WHERE a.room_id = r.id AND a.user_id = ?3
-            )
+            AND (?3 IS NULL OR r.id > ?3)
+        ORDER BY id
+        LIMIT ?4
         "
     )
     .bind(Visibility::Public)
     .bind(Visibility::Locked)
-    .bind(user_id)
+    .bind(after)
+    .bind(limit)
     .fetch_all(&mut *conn)
     .await?;
 

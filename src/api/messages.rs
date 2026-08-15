@@ -5,7 +5,6 @@ use crate::models::{File, Message, Permission, Permissions};
 use crate::{api, config, db, utils, validate};
 
 
-const MESSAGE_PAGE: i64 = 200;
 
 /// Cursor for message type
 /// - Latest: Give newest page
@@ -24,6 +23,12 @@ pub enum Posted {
     Duplicate(Message),
 }
 
+/// Outcome of an edit. Carries the room, which the caller no longer supplies
+pub struct Edited {
+    pub room_id: Uuid,
+    pub edited_at: i64,
+}
+
 
 // Primary Methods //
 
@@ -33,6 +38,7 @@ pub enum Posted {
 /// - author_id: Who is creating the message
 /// - body: Contents of message
 /// - client_nonce: Client's per-composition id, reused on retry
+/// - attachments: Files the message carries
 pub async fn post_message(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
@@ -154,7 +160,7 @@ pub async fn fetch_messages(
     let mut messages: Vec<Message> = sqlx::query_as(query)
         .bind(room_id)
         .bind(anchor)
-        .bind(MESSAGE_PAGE)
+        .bind(config::get().paging.message_page)
         .fetch_all(&mut *conn)
         .await?;
 
@@ -179,23 +185,22 @@ pub async fn fetch_messages(
     Ok(result)
 }
 
-/// Delete a message within a room
+/// Delete a message, returning the room it was in
 /// - pool: To get connections from
 /// - user_id: Who is attempting to delete a message
-/// - room_id: Where the message is located
 /// - message_id: What message to delete by id
 pub async fn delete_message(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
-    room_id: Uuid,
     message_id: Uuid,
-) -> Result<()> {
+) -> Result<Uuid> {
     let mut tx = pool.begin().await?;
-    let author_id = fetch_author(&mut tx, message_id, room_id).await?;
+    let message = fetch_message(&mut tx, message_id).await?;
+    let room_id = message.room_id;
 
     // If author has permission to delete
     let perms = db::effective_permissions(&mut *tx, user_id, room_id).await?;
-    if !can_delete_message(perms, user_id, author_id) {
+    if !can_delete_message(perms, user_id, message.author_id) {
         return Err(AppError::Forbidden);
     }
 
@@ -215,7 +220,7 @@ pub async fn delete_message(
 
     // Message already deleted, so nothing below should run
     if tombstone_msg.rows_affected() == 0 {
-        return Ok(())
+        return Ok(room_id)
     }
 
     // Clear it's attachments
@@ -233,17 +238,21 @@ pub async fn delete_message(
     // Finish Transaction
     tx.commit().await?;
 
-    Ok(())
+    Ok(room_id)
 
 }
 
+/// Edit a message, returning the room it is in and when it was edited
+/// - pool: To get connections from
+/// - user_id: Who is attempting to edit a message
+/// - message_id: What message to edit is by id
+/// - body: New message contents
 pub async fn edit_message(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
-    room_id: Uuid,
     message_id: Uuid,
     body: Option<&str>,
-) -> Result<i64> {
+) -> Result<Edited> {
 
     if let Some(text) = body {
         validate::message_body(text)?;
@@ -252,10 +261,11 @@ pub async fn edit_message(
     let mut tx = pool.begin().await?;
 
     // Check author
-    let author_id = fetch_author(&mut tx, message_id, room_id).await?;
+    let message = fetch_message(&mut tx, message_id).await?;
+    let room_id = message.room_id;
 
     // Does user have permission to edit the message
-    if author_id != user_id {
+    if message.author_id != user_id {
         return Err(AppError::Forbidden);
     }
 
@@ -304,7 +314,7 @@ pub async fn edit_message(
     // Commit transaction
     tx.commit().await?;
 
-    Ok(now)
+    Ok(Edited { room_id, edited_at: now })
 
 }
 
@@ -370,33 +380,30 @@ async fn fetch_by_nonce(
     Ok(message)
 }
 
-/// Reads a message's author
+/// Reads a message by id
 /// - conn: Connection to SQL DB
 /// - message_id: Message to look up
-/// - room_id: Room the message must belong to
-async fn fetch_author(
+async fn fetch_message(
     conn: &mut sqlx::SqliteConnection,
     message_id: Uuid,
-    room_id: Uuid,
-) -> Result<Uuid> {
+) -> Result<Message> {
 
-    let author_id: Option<Uuid> = sqlx::query_scalar(
+    let message: Option<Message> = sqlx::query_as(
         "
-        SELECT author_id
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
         FROM messages
-        WHERE id = ?1 AND room_id = ?2
+        WHERE id = ?1
         "
     )
     .bind(message_id)
-    .bind(room_id)
     .fetch_optional(&mut *conn)
     .await?;
 
-    let Some(author_id) = author_id else {
+    let Some(message) = message else {
         return Err(AppError::NotFound);
     };
 
-    Ok(author_id)
+    Ok(message)
 }
 
 /// Links files to a message, ordered as the client sent them

@@ -9,6 +9,11 @@ use crate::{db, utils, validate};
 ///
 /// The invite is claimed before the user is inserted so that retrieving "UsernameTaken"
 /// costs a valid invite (stops an attacker from brute forcing finding valid usernames).
+/// - pool: Pool of SQL Connections
+/// - code: Registration code being redeemed
+/// - username: Login name being claimed
+/// - display_name: Name shown to other users
+/// - password: Password to hash and store
 pub async fn register(
     pool: &sqlx::SqlitePool,
     code: &str,
@@ -73,6 +78,9 @@ pub async fn register(
 /// Every failure returns the same error, and an unknown username runs
 /// "burn_verify" so it costs the same time as a wrong password
 /// (ie. invalid username or password takes same ms response, hidden from attacker)
+/// - pool: Pool of SQL Connections
+/// - username: Login name to authenticate
+/// - password: Password to verify against the stored hash
 pub async fn login(
     pool: &sqlx::SqlitePool,
     username: &str,

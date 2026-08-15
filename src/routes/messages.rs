@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, request};
+use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -12,7 +12,7 @@ use crate::routes::files::FileResponse;
 use crate::routes::websockets::ServerEvent;
 use crate::routes::{AuthUser, AppState, websockets};
 
-// Post Message //
+// Data Structs & Implementations //
 
 #[derive(Deserialize)]
 pub struct PostMessageRequest {
@@ -52,6 +52,13 @@ impl MessageResponse {
     }
 }
 
+// Routing Methods //
+
+/// Post a message to a room
+/// - AuthUser: The message's author
+/// - app_state: Pool and socket registry
+/// - room_id: Room to post in
+/// - body: Message contents, nonce, and any attachments
 pub async fn post_message (
     AuthUser(user_id): AuthUser,
     State(app_state): State<AppState>,
@@ -110,7 +117,11 @@ pub struct FetchQuery {
     pub before: Option<i64>,
 }
 
-/// Given a room and query range, fetch all messages within it
+/// Get one page of a room's messages
+/// - AuthUser: Who the messages are fetched for
+/// - pool: Pool of SQL Connections
+/// - room_id: Room to read from
+/// - query: Cursor to page from
 pub async fn fetch_messages (
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
@@ -139,13 +150,16 @@ pub async fn fetch_messages (
     Ok(Json(response))
 }
 
-/// Delete a message by id in a room
+/// Delete a message
+/// - AuthUser: Who is deleting
+/// - app_state: Pool and socket registry
+/// - message_id: Message to delete
 pub async fn delete_message (
     AuthUser(user_id): AuthUser,
     State(app_state): State<AppState>,
-    Path((room_id, message_id)): Path<(Uuid, Uuid)>
+    Path(message_id): Path<Uuid>
 ) -> Result<StatusCode> {
-    api::messages::delete_message(&app_state.pool, user_id, room_id, message_id).await?;
+    let room_id = api::messages::delete_message(&app_state.pool, user_id, message_id).await?;
 
     let event = ServerEvent::MessageDeleted { room_id, message_id };
     websockets::broadcast(&app_state, room_id, event).await;
@@ -165,28 +179,33 @@ pub struct EditMessageResponse {
     pub edited_at: i64
 }
 
-/// Update a message by id in a room
-/// Do delta update, only update what changed broadcast "edited_at"
+/// Edit a message (delta update)
+/// - AuthUser: Who is editing
+/// - app_state: Pool and socket registry
+/// - message_id: Message to edit
+/// - request: The new body
 pub async fn update_message (
     AuthUser(user_id): AuthUser,
     State(app_state): State<AppState>,
-    Path((room_id, message_id)): Path<(Uuid, Uuid)>,
+    Path(message_id): Path<Uuid>,
     Json(request): Json<EditMessageRequest>
 ) -> Result<Json<EditMessageResponse>> {
 
-    let edited_at = api::messages::edit_message(
+    let result = api::messages::edit_message(
         &app_state.pool,
         user_id,
-        room_id,
         message_id,
         request.body.as_deref(),
     ).await?;
 
     let event = ServerEvent::MessageEdited {
-        room_id, message_id, body: request.body, edited_at
+        room_id: result.room_id,
+        message_id: message_id,
+        body: request.body,
+        edited_at: result.edited_at
     };
-    websockets::broadcast(&app_state, room_id, event).await;
+    websockets::broadcast(&app_state, result.room_id, event).await;
 
-    Ok(Json(EditMessageResponse { edited_at }))
+    Ok(Json(EditMessageResponse { edited_at: result.edited_at }))
 
 }

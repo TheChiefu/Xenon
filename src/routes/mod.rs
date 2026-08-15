@@ -23,32 +23,44 @@ use crate::error::{AppError, Result};
 // Main Router //
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/register", post(auth::register))
         .route("/login", post(auth::login))
+        .route("/register", post(auth::register))
         .route("/register-code", post(auth::create_registration_code))
+
+        // Me
+        .route("/me", get(users::get_me))
+        .route("/me/rooms", get(rooms::list_my_rooms))
+
+        // Rooms
         .route("/rooms",
             post(rooms::create_room)
-            .get(rooms::list_rooms)
+            .get(rooms::list_discoverable_rooms)
         )
-        .route("/rooms/public", get(rooms::list_public_rooms))
         .route("/rooms/{id}/join", post(rooms::join_room))
-        .route("/rooms/{id}/members/me", delete(rooms::leave_room))
+        .route("/rooms/{id}/leave", post(rooms::leave_room))
         .route("/rooms/{id}/messages",
             post(messages::post_message)
             .get(messages::fetch_messages)
         )
-        .route("/rooms/{id}/messages/{message_id}",
+
+        // Messages
+        .route("/messages/{id}",
             delete(messages::delete_message)
             .patch(messages::update_message)
         )
+
+        // Files
         .route("/files",
             post(files::upload)
             .layer(DefaultBodyLimit::max(files::max_body_bytes()))
         )
         .route("/files/{id}", get(files::download))
-        .route("/me", get(users::get_me))
+        
+        // Users
         .route("/users/{id}", get(users::get_user))
         .route("/users/{id}/role", patch(users::set_role))
+
+        // Other
         .route("/ws", get(websockets::ws_handler))
         .with_state(state)
 }

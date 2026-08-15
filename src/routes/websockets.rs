@@ -7,16 +7,12 @@ use uuid::Uuid;
 use serde::{Serialize};
 use tracing;
 
+use crate::config;
 use crate::db;
 use crate::routes::messages::MessageResponse;
 use crate::routes::{AuthUser, AppState};
 
-/// How many messages the channel holds. Each connection reads at its own pace,
-/// and one that is X messages behind loses the oldest when the next arrives.
-///
-/// Those messages are still in the database, so the client receives them on its
-/// next GET /rooms/{id}/messages. A slow socket delays delivery.
-const CAPACITY: usize = 32;
+// Data Structs //
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -26,12 +22,17 @@ pub enum ServerEvent {
     MessageEdited {room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64}
 }
 
+// Socketing Methods //
+
 /// Upgrades an HTTP request into a WebSocket.
 ///
 /// The request arrives as a GET carrying upgrade headers, so AuthUser runs on
 /// it like any other route and the connection is authenticated for its whole
 /// lifetime. Returns once the upgrade is agreed, leaving handle_socket running
 /// in its own task.
+/// - AuthUser: Who the socket belongs to
+/// - state: Pool and socket registry
+/// - ws: The upgrade handshake
 pub async fn ws_handler(
     AuthUser(user_id): AuthUser,
     State(state): State<AppState>,
@@ -67,7 +68,7 @@ async fn handle_socket(
         
         let tx = reg
             .entry(user_id)
-            .or_insert_with(|| broadcast::channel(CAPACITY).0);
+            .or_insert_with(|| broadcast::channel(config::get().socket.message_buffer).0);
         tx.subscribe()
     }; // Write lock released here, before the long-lived loop below
 

@@ -17,6 +17,8 @@ pub struct Config {
     pub storage: Storage,
     pub session: Session,
     pub limits: Limits,
+    pub paging: Paging,
+    pub socket: Socket,
 }
 
 impl Default for Config {
@@ -26,7 +28,9 @@ impl Default for Config {
             bind: Bind::default(),
             storage: Storage::default(),
             session: Session::default(),
-            limits: Limits::default()
+            limits: Limits::default(),
+            paging: Paging::default(),
+            socket: Socket::default()
         }
     }
 }
@@ -119,6 +123,18 @@ impl Config {
         let attachments = self.limits.attachments_per_message_max;
         if attachments < 1 || attachments > 32 {
             return Err("limits.attachments_per_message_max must be between 1 and 32".to_string());
+        }
+
+        if self.paging.message_page < 1 {
+            return Err("paging.message_page must be at least 1".to_string());
+        }
+
+        if self.paging.room_page < 1 {
+            return Err("paging.room_page must be at least 1".to_string());
+        }
+
+        if self.socket.message_buffer < 1 {
+            return Err("socket.message_buffer must be at least 1".to_string());
         }
 
         Ok(())
@@ -229,6 +245,36 @@ impl Default for Limits {
             password_max: 128,
             file_bytes_max: ByteSize::from_int(25 * MEBIBYTE),
             attachments_per_message_max: 10
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Paging {
+    pub message_page: i64,
+    pub room_page: i64
+}
+
+impl Default for Paging {
+    fn default() -> Self {
+        Paging {
+            message_page: 200,
+            room_page: 200
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Socket {
+    pub message_buffer: usize
+}
+
+impl Default for Socket {
+    fn default() -> Self {
+        Socket {
+            message_buffer: 32
         }
     }
 }

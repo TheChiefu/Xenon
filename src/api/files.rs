@@ -83,6 +83,8 @@ where
 }
 
 /// Given a file ID attempt to fetch it from the DB, returns a reader stream
+/// - pool: Pool of SQL Connections
+/// - file_id: File to look up
 pub async fn fetch(
     pool: &SqlitePool,
     file_id: Uuid,

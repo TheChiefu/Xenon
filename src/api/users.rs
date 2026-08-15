@@ -1,4 +1,3 @@
-use infer::MatcherType::App;
 use uuid::Uuid;
 
 use crate::db;
@@ -9,6 +8,8 @@ use crate::models::{GlobalRole, UserSummary};
 ///
 /// Not filtered by deleted_at: a soft-deleted user's past messages still need
 /// a name to display, so their profile stays resolvable after they're gone.
+/// - pool: Pool of SQL Connections
+/// - user_id: User to look up
 pub async fn get_user(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,

@@ -6,11 +6,12 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use super::AuthUser;
-use crate::error::{AppError, Result};
+use crate::error::Result;
 use crate::models::GlobalRole;
 use crate::{api, db, validate};
 
-// Register
+// Data Structs //
+
 #[derive(Deserialize)]
 pub struct RegisterRequest {
     pub invite_code: String,
@@ -25,6 +26,11 @@ pub struct RegisterResponse {
     pub session_token: String,
 }
 
+// Routing Methods //
+
+/// Create an account
+/// - pool: Pool of SQL Connections
+/// - body: Details for the new account
 pub async fn register(
     State(pool): State<SqlitePool>,
     Json(body): Json<RegisterRequest>,
@@ -53,6 +59,9 @@ pub struct LoginResponse {
     pub token: String,
 }
 
+/// Start a session
+/// - pool: Pool of SQL Connections
+/// - body: Credentials to authenticate with
 pub async fn login(
     State(pool): State<SqlitePool>,
     Json(body): Json<LoginRequest>,
@@ -73,6 +82,10 @@ pub struct CreateInviteResponse {
     pub code: String,
 }
 
+/// Mint a code that lets someone register
+/// - AuthUser: Who is issuing the code
+/// - pool: Pool of SQL Connections
+/// - body: Use count and lifetime, each optional
 pub async fn create_registration_code(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,

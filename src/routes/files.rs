@@ -16,6 +16,7 @@ use crate::models::{File, GlobalRole};
 use crate::routes::{AuthUser};
 use crate::bytesize;
 
+// Data Structs //
 
 #[derive(Clone, Serialize)]
 pub struct FileResponse {
@@ -36,6 +37,12 @@ impl From<File> for FileResponse {
     }
 }
 
+// Routing Methods //
+
+/// Store an uploaded file
+/// - AuthUser: Who is uploading
+/// - pool: Pool of SQL Connections
+/// - multipart: Request body carrying the file
 pub async fn upload(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
@@ -75,6 +82,9 @@ pub async fn upload(
     }
 }
 
+/// Stream a stored file
+/// - pool: Pool of SQL Connections
+/// - file_id: File to send
 pub async fn download(
     AuthUser(_): AuthUser,
     State(pool): State<SqlitePool>,
