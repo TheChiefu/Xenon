@@ -30,6 +30,8 @@ pub fn router(state: AppState) -> Router {
         // Me
         .route("/me", get(users::get_me))
         .route("/me/rooms", get(rooms::list_my_rooms))
+        .route("/me/invites", get(rooms::list_my_invites))
+        .route("/me/invites/{room_id}", delete(rooms::decline))
 
         // Rooms
         .route("/rooms",
@@ -42,6 +44,11 @@ pub fn router(state: AppState) -> Router {
             post(messages::post_message)
             .get(messages::fetch_messages)
         )
+        .route("/rooms/{id}/invites",
+            post(rooms::invite_user)
+            .get(rooms::list_invites)
+        )
+        .route("/rooms/{id}/invites/{user_id}", delete(rooms::revoke))
 
         // Messages
         .route("/messages/{id}",
@@ -57,6 +64,7 @@ pub fn router(state: AppState) -> Router {
         .route("/files/{id}", get(files::download))
         
         // Users
+        .route("/users", get(users::get_users))
         .route("/users/{id}", get(users::get_user))
         .route("/users/{id}/role", patch(users::set_role))
 

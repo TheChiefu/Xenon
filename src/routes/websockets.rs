@@ -19,7 +19,8 @@ use crate::routes::{AuthUser, AppState};
 pub enum ServerEvent {
     Message { room_id: Uuid, message: MessageResponse},
     MessageDeleted {room_id: Uuid, message_id: Uuid},
-    MessageEdited {room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64}
+    MessageEdited {room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64},
+    Invited {room_id: Uuid, invited_by: Uuid}
 }
 
 // Socketing Methods //
@@ -150,4 +151,31 @@ pub async fn broadcast(
         // Could not serialize
         Err(e) => tracing::error!("failed to serialize server event: {e}"),
     };
+}
+
+pub async fn notify_user(
+    state: &AppState,
+    user_id: Uuid,
+    event: ServerEvent
+) {
+
+    // Serialize event
+    match serde_json::to_string(&event) {
+        Ok(payload) => {
+            let reg = match state.registry.read() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("registry lock was poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+
+            if let Some(tx) = reg.get(&user_id) {
+                let _ = tx.send(payload);
+            }
+        },
+
+        Err(e) => tracing::error!("failed to serialize server event: {e}"),
+    }
+
 }

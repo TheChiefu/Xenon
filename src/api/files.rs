@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, path::{Path, PathBuf}};
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use sqlx::SqlitePool;
 use tokio::{self, io::{AsyncRead, AsyncReadExt, AsyncWriteExt}};
@@ -18,16 +18,6 @@ struct Stream {
     sha256: Vec<u8>,
     byte_size: i64,
     mime: &'static str
-}
-
-
-/// A file and the message attached it (Joined Row)
-/// One query covers many messages, so every row carries its message_id
-#[derive(sqlx::FromRow)]
-struct AttachmentRow {
-    message_id: Uuid,
-    #[sqlx(flatten)]
-    file: File,
 }
 
 
@@ -124,67 +114,6 @@ pub async fn fetch(
             Err(AppError::Io(e))
         }
     }
-}
-
-/// Fetches every file attached to one message, ordered by ordinal
-/// - conn: Connection to SQL DB
-/// - message_id: Message the files are attached to
-pub async fn for_message(
-    conn: &mut sqlx::SqliteConnection,
-    message_id: Uuid
-) -> Result<Vec<File>> {
-    
-    let result = sqlx::query_as::<_, File>(
-        "
-        SELECT f.id, f.sha256, f.filename, f.mime, f.byte_size, f.created_at
-        FROM message_attachments ma
-        JOIN files f ON f.id = ma.file_id
-        WHERE ma.message_id = ?1
-        ORDER BY ma.ordinal
-        "
-    )
-    .bind(message_id)
-    .fetch_all(&mut *conn)
-    .await?;
-
-    Ok(result)
-}
-
-/// Fetches attachments for a page of messages, keyed by the message they belong to
-/// - conn: Connection to SQL DB
-/// - room_id: Room the page was read from
-/// - low: Lowest seq in the page
-/// - high: Highest seq in the page
-pub async fn for_message_range(
-    conn: &mut sqlx::SqliteConnection,
-    room_id: Uuid,
-    low: i64,
-    high: i64,
-) -> Result<HashMap<Uuid, Vec<File>>> {
-
-    let rows = sqlx::query_as::<_, AttachmentRow>(
-        "
-        SELECT ma.message_id, f.id, f.sha256, f.filename, f.mime, f.byte_size, f.created_at
-        FROM message_attachments ma
-        JOIN messages m ON m.id = ma.message_id
-        JOIN files f ON f.id = ma.file_id
-        WHERE m.room_id = ?1 AND m.seq BETWEEN ?2 AND ?3
-        ORDER BY ma.message_id, ma.ordinal
-        "
-    )
-    .bind(room_id)
-    .bind(low)
-    .bind(high)
-    .fetch_all(&mut *conn)
-    .await?;
-
-    let mut files: HashMap<Uuid, Vec<File>> = HashMap::new();
-    for row in rows {
-        files.entry(row.message_id).or_default().push(row.file);
-    }
-
-    Ok(files)
-
 }
 
 // Helper Methods //

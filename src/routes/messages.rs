@@ -95,7 +95,7 @@ pub async fn post_message (
 
     // Get all attachments in message and attach to response
     let mut conn = app_state.pool.acquire().await?;
-    let files = api::files::for_message(&mut *conn, message.id).await?;
+    let files = api::messages::attachments::for_message(&mut *conn, message.id).await?;
     let attachments = files.into_iter().map(FileResponse::from).collect();
     let response = MessageResponse::new(message, attachments);
 

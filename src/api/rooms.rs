@@ -1,3 +1,6 @@
+pub mod bans;
+pub mod invites;
+
 use uuid::Uuid;
 
 use crate::error::{AppError, Result};
@@ -105,33 +108,21 @@ pub async fn join_room(
     .fetch_optional(&mut *tx)
     .await?;
 
-    // Locked and Hidden require an invite (unimplemented)
-    // Also: A missing room is the same as a closed one (disallow entry)
-    if visibility != Some(Visibility::Public) {
+    let now = utils::now_ms();
+
+    // Public is self service. Locked and Hidden require an invite, and a
+    // missing room is treated as closed
+    let requires_invite = match visibility {
+        Some(Visibility::Public) => false,
+        Some(_) => true,
+        None => return Err(AppError::Forbidden)
+    };
+
+    if requires_invite && !invites::has_unexpired_invite(&mut tx, room_id, user_id, now).await? {
         return Err(AppError::Forbidden);
     }
 
-    let now = utils::now_ms();
-
-    // Check if user is banned from room. Expired rows are never swept, so the
-    // expiry has to be tested here rather than trusting the row's presence
-    let is_banned: bool = sqlx::query_scalar(
-        "
-        SELECT EXISTS(
-            SELECT 1
-            FROM room_bans
-            WHERE room_id = ?1 AND user_id = ?2 AND (expires_at IS NULL OR expires_at > ?3)
-        )
-        "
-    )
-    .bind(room_id)
-    .bind(user_id)
-    .bind(now)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    // If user is still banned, disallow entry
-    if is_banned {
+    if bans::is_banned(&mut tx, room_id, user_id, now).await? {
         return Err(AppError::Forbidden);
     }
 
@@ -150,28 +141,13 @@ pub async fn join_room(
     .execute(&mut *tx)
     .await?;
 
+    // Use user invite (remove user from room invite table)
+    invites::delete(&mut tx, user_id, room_id).await?;
+
     // If no errors, commit transaction
     tx.commit().await?;
 
     Ok(())
-}
-
-/// Who inherits a Public room that just lost its last DeleteRoom holder.
-/// `members` is ordered oldest first; None means nobody needs promoting.
-fn pick_promotion(members: &[(Uuid, Permissions)]) -> Option<Uuid> {
-
-    // Someone can still delete the room, leave it alone
-    for (_, perms) in members {
-        if perms.has(Permission::DeleteRoom) {
-            return None;
-        }
-    }
-
-    // Nobody can, the longest-standing member inherits it
-    match members.first() {
-        Some((user_id, _)) => Some(*user_id),
-        None => None
-    }
 }
 
 /// Remove one member from one room, culling or promoting as needed.
@@ -315,7 +291,7 @@ pub async fn list_my_rooms(
 
 /// One page of the discoverable rooms (Public and Locked)
 /// - pool: Pool of SQL Connections
-/// - after: Room id to page from, None for the first page
+/// - after: Room id to page from ('None' shows first 'limit' amount of results)
 /// - limit: How many rooms to return
 pub async fn list_discoverable_rooms(
     pool: &sqlx::SqlitePool,
@@ -343,4 +319,24 @@ pub async fn list_discoverable_rooms(
     .await?;
 
     Ok(rooms)
+}
+
+// Helper Methods //
+
+/// Who inherits a Public room that just lost its last DeleteRoom holder.
+/// `members` is ordered oldest first; None means nobody needs promoting.
+fn pick_promotion(members: &[(Uuid, Permissions)]) -> Option<Uuid> {
+
+    // Someone can still delete the room, leave it alone
+    for (_, perms) in members {
+        if perms.has(Permission::DeleteRoom) {
+            return None;
+        }
+    }
+
+    // Nobody can, the longest-standing member inherits it
+    match members.first() {
+        Some((user_id, _)) => Some(*user_id),
+        None => None
+    }
 }

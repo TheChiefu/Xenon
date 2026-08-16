@@ -1,8 +1,10 @@
+pub mod attachments;
+
 use uuid::Uuid;
 
 use crate::error::{AppError, Result};
 use crate::models::{File, Message, Permission, Permissions};
-use crate::{api, config, db, utils, validate};
+use crate::{config, db, utils, validate};
 
 
 
@@ -23,7 +25,7 @@ pub enum Posted {
     Duplicate(Message),
 }
 
-/// Outcome of an edit. Carries the room, which the caller no longer supplies
+/// Outcome of an edit
 pub struct Edited {
     pub room_id: Uuid,
     pub edited_at: i64,
@@ -88,7 +90,7 @@ pub async fn post_message(
 
     } else {
 
-        insert_attachments(&mut tx, message_id, attachments).await?;
+        attachments::insert(&mut tx, message_id, attachments).await?;
 
         // Return newly created message as result
         Posted::Created(Message {
@@ -175,7 +177,7 @@ pub async fn fetch_messages(
     // Get attachments for all messages on page
     let low = messages[0].seq;
     let high = messages[messages.len() -1].seq;
-    let mut pairs = api::files::for_message_range(&mut conn, room_id, low, high).await?;
+    let mut pairs = attachments::for_message_range(&mut conn, room_id, low, high).await?;
     let mut result = Vec::with_capacity(messages.len());
     for message in messages {
         let files = pairs.remove(&message.id).unwrap_or_default();
@@ -404,43 +406,6 @@ async fn fetch_message(
     };
 
     Ok(message)
-}
-
-/// Links files to a message, ordered as the client sent them
-/// - conn: Connection to SQL DB
-/// - message_id: Message the files belong to
-/// - attachments: Files the message carries
-async fn insert_attachments(
-    conn: &mut sqlx::SqliteConnection,
-    message_id: Uuid,
-    attachments: &[Uuid],
-) -> Result<()> {
-
-    let sql = "INSERT INTO message_attachments (message_id, file_id, ordinal) VALUES (?1, ?2, ?3)";
-
-    // Iterate over each attachment and insert into DB
-    for (pos, id) in attachments.iter().enumerate() {
-        let result = sqlx::query(sql)
-            .bind(message_id)
-            .bind(*id)
-            .bind(pos as i64)
-            .execute(&mut *conn)
-            .await;
-
-        if let Err(e) = result {
-
-            // No "files" row for that id (client named a file that is gone)
-            if let sqlx::Error::Database(db) = &e {
-                if db.is_foreign_key_violation() {
-                    return Err(AppError::Validation(format!("no file with id {id}")));
-                }
-            }
-
-            return Err(AppError::Db(e));
-        }
-    }
-
-    Ok(())
 }
 
 /// Whether a user may post the message they sent

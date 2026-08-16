@@ -133,6 +133,10 @@ impl Config {
             return Err("paging.room_page must be at least 1".to_string());
         }
 
+        if self.paging.users_page < 1 {
+            return Err("paging.user_page must be at least 1".to_string());
+        }
+
         if self.socket.message_buffer < 1 {
             return Err("socket.message_buffer must be at least 1".to_string());
         }
@@ -253,14 +257,16 @@ impl Default for Limits {
 #[serde(default)]
 pub struct Paging {
     pub message_page: i64,
-    pub room_page: i64
+    pub room_page: i64,
+    pub users_page: i64,
 }
 
 impl Default for Paging {
     fn default() -> Self {
         Paging {
             message_page: 200,
-            room_page: 200
+            room_page: 200,
+            users_page: 25,
         }
     }
 }

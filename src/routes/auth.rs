@@ -82,7 +82,7 @@ pub struct CreateInviteResponse {
     pub code: String,
 }
 
-/// Mint a code that lets someone register
+/// Create code that lets someone register
 /// - AuthUser: Who is issuing the code
 /// - pool: Pool of SQL Connections
 /// - body: Use count and lifetime, each optional

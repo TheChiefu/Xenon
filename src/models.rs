@@ -79,10 +79,9 @@ impl Default for Permissions {
     fn default() -> Self { Self::NONE }
 }
 
-// Users
+// Users //
 
-/// Public subset of a user row: safe to hand to any authenticated caller,
-/// unlike the full row (password_hash, email, global_role, ...)
+/// Subset of a user, safe to hand to authenticated callers
 #[derive(sqlx::FromRow, Serialize)]
 pub struct UserSummary {
     pub id: Uuid,
@@ -90,7 +89,22 @@ pub struct UserSummary {
     pub display_name: String,
 }
 
-// Room
+// Public subset of user without private identifying information
+#[derive(sqlx::FromRow, Serialize)]
+pub struct User {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: String,
+    pub description: String,
+    pub avatar_file_id: Uuid,
+    pub banner_file_id: Uuid,
+    pub global_role: i8,
+    pub status_pref: i8,
+    pub created_at: i64,
+    pub deleted_at: i64
+}
+
+// Room //
 
 #[derive(sqlx::FromRow, Serialize)]
 pub struct Room {
@@ -101,6 +115,19 @@ pub struct Room {
     pub created_at: i64,
     pub mutation_seq: i64
 }
+
+/// A `room_invites` row plus `rooms.name`, since
+/// the invitee has no `room_access` row on their own
+#[derive(sqlx::FromRow, Serialize)]
+pub struct RoomInvite {
+    pub room_id: Uuid,
+    pub room_name: Option<String>,
+    pub invited_by: Uuid,
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
+}
+
+// Messages //
 
 #[derive(sqlx::FromRow)]
 pub struct Message {
@@ -113,6 +140,8 @@ pub struct Message {
     pub edited_at: Option<i64>,
     pub deleted_at: Option<i64>
 }
+
+// Files //
 
 #[derive(sqlx::FromRow)]
 pub struct File {

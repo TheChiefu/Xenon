@@ -4,6 +4,50 @@ use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::{GlobalRole, UserSummary};
 
+/// One page of users
+/// - pool: Pool of SQL Connections
+/// - match_user: Username to match query on
+/// - after: User id to page from ('None' shows first 'limit' amount of results)
+/// - limit: How many users to return
+pub async fn get_users(
+    pool: &sqlx::SqlitePool,
+    match_user: Option<String>,
+    after: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<UserSummary>> {
+
+    let mut conn = pool.acquire().await?;
+
+    // Escape patterns for SQL string
+    let pattern = match_user.map(|name| {
+        let escaped = name
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        format!("{escaped}%")
+    });
+
+    let users: Vec<UserSummary> = sqlx::query_as(
+        "
+        SELECT id, username, display_name
+        FROM users u
+        WHERE (?1 IS NULL OR u.id > ?1)
+            AND (?2 IS NULL OR u.username LIKE ?2 ESCAPE '\\')
+            AND u.deleted_at IS NULL
+        ORDER BY id
+        LIMIT ?3
+        "
+    )
+    .bind(after)
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(users)
+
+}
+
 /// Looks up a user's public profile by id.
 ///
 /// Not filtered by deleted_at: a soft-deleted user's past messages still need
