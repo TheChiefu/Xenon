@@ -87,6 +87,7 @@ pub struct UserSummary {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
+    pub global_role: GlobalRole,
 }
 
 // Public subset of user without private identifying information

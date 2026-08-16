@@ -29,7 +29,7 @@ pub async fn get_users(
 
     let users: Vec<UserSummary> = sqlx::query_as(
         "
-        SELECT id, username, display_name
+        SELECT id, username, display_name, global_role
         FROM users u
         WHERE (?1 IS NULL OR u.id > ?1)
             AND (?2 IS NULL OR u.username LIKE ?2 ESCAPE '\\')
@@ -63,7 +63,7 @@ pub async fn get_user(
 
     let user: Option<UserSummary> = sqlx::query_as(
         "
-        SELECT id, username, display_name
+        SELECT id, username, display_name, global_role
         FROM users
         WHERE id = ?1
         "
