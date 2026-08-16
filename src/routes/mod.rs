@@ -2,6 +2,7 @@ mod auth;
 mod files;
 mod messages;
 mod rooms;
+mod server;
 mod users;
 mod websockets;
 
@@ -70,6 +71,9 @@ pub fn router(state: AppState) -> Router {
 
         // Other
         .route("/ws", get(websockets::ws_handler))
+        .route("/server", get(server::info))
+        .route("/server/version", get(server::version))
+        .route("/server/type", get(server::kind))
         .with_state(state)
 }
 

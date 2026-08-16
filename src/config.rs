@@ -19,6 +19,7 @@ pub struct Config {
     pub limits: Limits,
     pub paging: Paging,
     pub socket: Socket,
+    pub info: Info,
 }
 
 impl Default for Config {
@@ -30,7 +31,8 @@ impl Default for Config {
             session: Session::default(),
             limits: Limits::default(),
             paging: Paging::default(),
-            socket: Socket::default()
+            socket: Socket::default(),
+            info: Info::default(),
         }
     }
 }
@@ -139,6 +141,18 @@ impl Config {
 
         if self.socket.message_buffer < 1 {
             return Err("socket.message_buffer must be at least 1".to_string());
+        }
+
+        if self.info.name.is_empty() {
+            tracing::warn!("no server name provided")
+        }
+
+        if self.info.kind.is_empty() {
+            tracing::warn!("no server kind/type provided")
+        }
+
+        if self.info.description.is_empty() {
+            tracing::warn!("no server description provided")
         }
 
         Ok(())
@@ -281,6 +295,25 @@ impl Default for Socket {
     fn default() -> Self {
         Socket {
             message_buffer: 32
+        }
+    }
+}
+
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Info {
+    pub name: String,
+    pub kind: String,
+    pub description: String,
+}
+
+impl Default for Info {
+    fn default() -> Self {
+        Info {
+            name: "Xenon Server".to_string(),
+            kind: "Development".to_string(),
+            description: "My custom Xenon server".to_string(),
         }
     }
 }
