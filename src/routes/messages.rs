@@ -17,6 +17,8 @@ use crate::routes::{AuthUser, AppState, websockets};
 #[derive(Deserialize)]
 pub struct PostMessageRequest {
     pub body: Option<String>,
+    #[serde(default)]
+    pub spoiler: bool,
     pub client_nonce: String,
     #[serde(default)]
     pub attachments: Vec<Uuid>
@@ -32,6 +34,7 @@ pub struct MessageResponse {
     pub created_at: i64,
     pub edited_at: Option<i64>,
     pub deleted_at: Option<i64>,
+    pub spoiler: bool,
     pub attachments: Vec<FileResponse>
 }
 
@@ -47,6 +50,7 @@ impl MessageResponse {
             created_at: m.created_at,
             edited_at: m.edited_at,
             deleted_at: m.deleted_at,
+            spoiler: m.spoiler,
             attachments
         }
     }
@@ -84,6 +88,7 @@ pub async fn post_message (
         room_id,
         user_id,
         body.body.as_deref(),
+        body.spoiler,
         nonce,
         &body.attachments
     ).await?;

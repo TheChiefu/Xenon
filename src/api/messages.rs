@@ -39,6 +39,7 @@ pub struct Edited {
 /// - room_id: Where message is to be created
 /// - author_id: Who is creating the message
 /// - body: Contents of message
+/// - spoiler: Whether the message renders blurred until revealed
 /// - client_nonce: Client's per-composition id, reused on retry
 /// - attachments: Files the message carries
 pub async fn post_message(
@@ -46,6 +47,7 @@ pub async fn post_message(
     room_id: Uuid,
     author_id: Uuid,
     body: Option<&str>,
+    spoiler: bool,
     client_nonce: [u8; 16],
     attachments: &[Uuid],
 ) -> Result<Posted> {
@@ -67,8 +69,8 @@ pub async fn post_message(
     let now = utils::now_ms();
     let result = sqlx::query(
         "
-        INSERT INTO messages (id, room_id, author_id, body, client_nonce, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        INSERT INTO messages (id, room_id, author_id, body, client_nonce, created_at, spoiler)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
         ON CONFLICT (author_id, client_nonce) DO NOTHING
         "
     )
@@ -78,6 +80,7 @@ pub async fn post_message(
     .bind(body)
     .bind(client_nonce.as_slice())
     .bind(now)
+    .bind(spoiler)
     .execute(&mut *tx)
     .await?;
 
@@ -101,7 +104,8 @@ pub async fn post_message(
             body: body.map(str::to_string),
             created_at: now,
             edited_at: None,
-            deleted_at: None
+            deleted_at: None,
+            spoiler
         })
     };
 
@@ -142,7 +146,7 @@ pub async fn fetch_messages(
     // Two directions from the anchor: below it descending, above it ascending
     let query = if older {
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
         FROM messages
         WHERE room_id = ?1 AND seq < ?2 AND deleted_at IS NULL
         ORDER BY seq DESC
@@ -150,7 +154,7 @@ pub async fn fetch_messages(
         "
     } else {
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
         FROM messages
         WHERE room_id = ?1 AND seq > ?2 AND deleted_at IS NULL
         ORDER BY seq
@@ -369,7 +373,7 @@ async fn fetch_by_nonce(
 
     let message = sqlx::query_as::<_, Message>(
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
         FROM messages
         WHERE author_id = ?1 AND client_nonce = ?2
         "
@@ -392,7 +396,7 @@ async fn fetch_message(
 
     let message: Option<Message> = sqlx::query_as(
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
         FROM messages
         WHERE id = ?1
         "
