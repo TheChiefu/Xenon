@@ -2,18 +2,22 @@
 
 ## Description
 A simple chat application for use in small to medium sized groups. It is a single
-server instance with many rooms (public/private) and DM support. Unlike discord clones,
+server instance with many room types (public/private/hidden). Unlike discord clones,
 this is not an ecosystem server but a single "guild" instance with rooms acting
 as separators for groups.
 
+Public rooms are meant to be open to anyone on the server to join and leave as they please.
+Locked rooms are meant to be visible for search but require a member of the room to enter.
+Hidden rooms are as the name implies, hidden from discoverability and requires invite to enter, these can function as a DM (ie. one on one hidden room between to users).
+
 Using SQLite for making database mangement simple and not requiring an active service to run (ie. Postgres).
 
-Basic Security for:
-|Category| Method |
-|-|-|
-| Invite Codes (12 Characters by Default) | OsRng | 
-| Password Hashing| Argon2id |
-| Session Tokens | OsRng + SHA256 |
+## Basic Security
+|Category| Method | Description | 
+|-|-|-|
+| Invite Codes (12 Characters by Default) | OsRng | Invite is required by an Admin to enter server | 
+| Password Hashing| Argon2id | Prevents password snooping (no plain-text) |
+| Session Tokens | OsRng + SHA256 | Randomly generated token per login session | 
 
 ## Configuration
 A `config.toml` is written alongside server on first run with defaults.
@@ -27,22 +31,23 @@ It covers:
 By default the `config.toml` file is expected to be at the same directory as the server.
 To use a different directory on boot, set an environment variable `XENON_CONFIG` with the desired location.
 
-
 ## Plan
 - [x] Create Database model/schema (first pass)
-    - [x] Owner user created at first launch
-    - [x] Create `chat.db` at first launch
 - [x] Get REST API functional
-    - [x] Registration, login, invite codes
-    - [x] Rooms: create, join, leave, list
-    - [x] Messages: post, paginated fetch
+    - [x] Registration, login, registration codes
+    - [x] Rooms: create, join, leave, list, discovery
+    - [x] Messages: post, paginated fetch, edit, delete, spoilers
 - [x] Get sockets functional
-    - [x] Live message broadcast to everyone in a room
+    - [x] Live broadcast of messages, edits, deletes, invites, bans
 - [x] File uploads and attachments
-    - [x] Streamed uploads, deduplicated by content hash
-    - [x] Attachments on messages
+- [x] Room membership
+    - [x] Invites for locked/hidden rooms
+    - [x] Bans
+    - [x] Per-room permissions and global roles
+- [ ] Room settings (rename, delete)
+- [ ] Profile and account (edit profile, change password, delete account, transfer ownership)
+- [ ] Direct messages
 - [ ] Messages
-    - [x] Edit and delete
     - [ ] Search
     - [ ] Read state
 - [ ] Online presence and typing indicators
@@ -51,7 +56,6 @@ To use a different directory on boot, set an environment variable `XENON_CONFIG`
 - [ ] Create rudimentary GUI Application (Slint)
     - [ ] Linux/Windows Build
     - [ ] Android Build
-- [ ] TBD
 
 ## Developer Comment(s):
 I am not a database, server, or security developer; so have no expectation of a professional grade chat
