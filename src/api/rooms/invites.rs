@@ -26,7 +26,7 @@ pub struct RoomInviteEntry {
 /// - invitee: The user who is being invited
 /// - inviter: The user who made the invite
 /// - expire_delta: How much time (in ms) an invite has before it expires
-///     (based on invite creation time + expire delta)
+///     (based on invite creation time + expire delta) / or if at all
 pub async fn create(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
@@ -131,7 +131,7 @@ pub async fn has_unexpired_invite(
 /// - pool: Pool of SQL Connections
 /// - user_id: User making request
 /// - room_id: Room to query
-pub async fn list_invites(
+pub async fn list(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
     room_id: Uuid

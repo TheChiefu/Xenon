@@ -50,6 +50,13 @@ pub fn router(state: AppState) -> Router {
             .get(rooms::list_invites)
         )
         .route("/rooms/{id}/invites/{user_id}", delete(rooms::revoke))
+        .route("/rooms/{id}/members", get(rooms::list_members))
+        .route("/rooms/{id}/members/{user_id}", patch(rooms::set_permissions))
+        .route("/rooms/{id}/bans", 
+            get(rooms::list_bans)
+            .post(rooms::ban_user)
+        )
+        .route("/rooms/{id}/bans/{user_id}", delete(rooms::unban_user))
 
         // Messages
         .route("/messages/{id}",

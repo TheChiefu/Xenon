@@ -20,7 +20,8 @@ pub enum ServerEvent {
     Message { room_id: Uuid, message: MessageResponse},
     MessageDeleted {room_id: Uuid, message_id: Uuid},
     MessageEdited {room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64},
-    Invited {room_id: Uuid, invited_by: Uuid}
+    Invited {room_id: Uuid, invited_by: Uuid},
+    Banned {room_id: Uuid},
 }
 
 // Socketing Methods //

@@ -37,7 +37,7 @@ pub enum Permission {
     Invite = 4,         // Create invites to room
     Manage = 5,         // Permissions
     Rename = 6,         // Edit room name
-    Suspend = 7,        // Remove a user from a room, with or without an expiry
+    Ban = 7,        // Remove a user from a room, with or without an expiry
     Commands = 8,       // Use slash commands (unimplemented)
     Connect = 9,        // Join voice chat (unimplemented)
     Speak = 10,         // Can speak in voice chat (unimplemented)
@@ -56,22 +56,40 @@ impl Permissions {
     pub const NONE: Self = Self(0);
     pub const ALL: Self = Self(-1);
 
+    #[must_use]
     pub fn has(self, p: Permission) -> bool {
         let perm = p as u8;
         let bit = 1i64 << perm; // Shift by 'perm' bits left
         self.0 & bit != 0            // AND | Check if 'perm' bit is set (0 - No, 1 -Yes)
     }
 
+    #[must_use]
     pub fn grant(self, p: Permission) -> Self {
         let perm = p as u8;
         let bit = 1i64 << perm;
         Self(self.0 | bit) // Turn 'perm' bit ON
     }
 
+    #[must_use]
     pub fn revoke(self, p: Permission) -> Self {
         let perm = p as u8;
         let bit = 1i64 << perm;
         Self(self.0 & !bit) // Turn 'perm' bit OFF
+    }
+
+    /// Whether every permission in the given set is also in this one
+    /// - p: Permission set that must be covered
+    pub fn contains(self, p: Permissions) -> bool {
+        p.0 & !self.0 == 0 // No bit of 'p' is absent from self
+    }
+
+    /// Given a list of permissions create "permission" bitmask from it
+    pub fn from_list(perms: &[Permission]) -> Permissions {
+        let mut output = Self::NONE;
+        for perm in perms {
+            output = output.grant(*perm);
+        }
+        output
     }
 }
 
@@ -126,6 +144,14 @@ pub struct RoomInvite {
     pub invited_by: Uuid,
     pub created_at: i64,
     pub expires_at: Option<i64>,
+}
+
+/// A "room_access" row
+#[derive(sqlx::FromRow, Serialize)]
+pub struct RoomMember {
+    pub user_id: Uuid,
+    pub permissions: Permissions,
+    pub granted_at: i64
 }
 
 // Messages //
