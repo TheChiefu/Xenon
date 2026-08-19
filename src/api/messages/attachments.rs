@@ -1,3 +1,5 @@
+//! The `message_attachments` table: which files hang off which message.
+
 use std::collections::HashMap;
 
 use uuid::Uuid;
@@ -5,8 +7,11 @@ use uuid::Uuid;
 use crate::error::{AppError, Result};
 use crate::models::File;
 
-/// A file and the message attached it (Joined Row)
-/// One query covers many messages, so every row carries its message_id
+// Data Structs //
+
+/// A file joined to the message it is attached to.
+///
+/// One query covers many messages, so every row carries its `message_id`.
 #[derive(sqlx::FromRow)]
 struct AttachmentRow {
     message_id: Uuid,
@@ -14,10 +19,19 @@ struct AttachmentRow {
     file: File,
 }
 
-/// Links files to a message, ordered as the client sent them
-/// - conn: Connection to SQL DB
-/// - message_id: Message the files belong to
-/// - attachments: Files the message carries
+// API Methods //
+
+/// Links files to a message, ordered as the client sent them.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `message_id` - Message the files belong to.
+/// * `attachments` - Files the message carries.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if an id names a file that is not stored.
 pub async fn insert(
     conn: &mut sqlx::SqliteConnection,
     message_id: Uuid,
@@ -29,11 +43,11 @@ pub async fn insert(
     // Iterate over each attachment and insert into DB
     for (pos, id) in attachments.iter().enumerate() {
         let result = sqlx::query(sql)
-            .bind(message_id)
-            .bind(*id)
-            .bind(pos as i64)
-            .execute(&mut *conn)
-            .await;
+        .bind(message_id)
+        .bind(*id)
+        .bind(pos as i64)
+        .execute(&mut *conn)
+        .await;
 
         if let Err(e) = result {
 
@@ -51,12 +65,15 @@ pub async fn insert(
     Ok(())
 }
 
-/// Fetches every file attached to one message, ordered by ordinal
-/// - conn: Connection to SQL DB
-/// - message_id: Message the files are attached to
+/// Reads every file attached to one message, ordered by ordinal.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `message_id` - Message the files are attached to.
 pub async fn for_message(
     conn: &mut sqlx::SqliteConnection,
-    message_id: Uuid
+    message_id: Uuid,
 ) -> Result<Vec<File>> {
 
     let result = sqlx::query_as::<_, File>(
@@ -75,11 +92,14 @@ pub async fn for_message(
     Ok(result)
 }
 
-/// Fetches attachments for a page of messages, keyed by the message they belong to
-/// - conn: Connection to SQL DB
-/// - room_id: Room the page was read from
-/// - low: Lowest seq in the page
-/// - high: Highest seq in the page
+/// Reads the attachments for a page of messages, keyed by message.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room the page was read from.
+/// * `low` - Lowest seq in the page.
+/// * `high` - Highest seq in the page.
 pub async fn for_message_range(
     conn: &mut sqlx::SqliteConnection,
     room_id: Uuid,
@@ -109,5 +129,4 @@ pub async fn for_message_range(
     }
 
     Ok(files)
-
 }

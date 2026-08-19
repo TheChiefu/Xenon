@@ -1,3 +1,5 @@
+//! HTTP handlers for messages.
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -10,10 +12,11 @@ use crate::error::{AppError, Result};
 use crate::models::Message;
 use crate::routes::files::FileResponse;
 use crate::routes::websockets::ServerEvent;
-use crate::routes::{AuthUser, AppState, websockets};
+use crate::routes::{websockets, AppState, AuthUser};
 
-// Data Structs & Implementations //
+// Data Structs //
 
+/// POST body for a new message.
 #[derive(Deserialize)]
 pub struct PostMessageRequest {
     pub body: Option<String>,
@@ -24,6 +27,13 @@ pub struct PostMessageRequest {
     pub attachments: Vec<Uuid>
 }
 
+/// PATCH body for editing a message.
+#[derive(Deserialize)]
+pub struct EditMessageRequest {
+    pub body: Option<String>
+}
+
+/// A message and the files attached to it.
 #[derive(Clone, Serialize)]
 pub struct MessageResponse {
     pub seq: i64,
@@ -38,19 +48,38 @@ pub struct MessageResponse {
     pub attachments: Vec<FileResponse>
 }
 
+/// Response carrying when a message was edited.
+#[derive(Serialize)]
+pub struct EditMessageResponse {
+    pub edited_at: i64
+}
+
+/// Query string selecting which page of a room's history to read.
+#[derive(Deserialize)]
+pub struct FetchQuery {
+    pub after: Option<i64>,
+    pub before: Option<i64>,
+}
+
 impl MessageResponse {
 
-    pub fn new(m: Message, attachments: Vec<FileResponse>) -> Self {
+    /// Joins a stored message to the files attached to it.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The stored message.
+    /// * `attachments` - Files the message carries.
+    pub fn new(message: Message, attachments: Vec<FileResponse>) -> Self {
         Self {
-            seq: m.seq,
-            id: m.id,
-            room_id: m.room_id,
-            author_id: m.author_id,
-            body: m.body,
-            created_at: m.created_at,
-            edited_at: m.edited_at,
-            deleted_at: m.deleted_at,
-            spoiler: m.spoiler,
+            seq: message.seq,
+            id: message.id,
+            room_id: message.room_id,
+            author_id: message.author_id,
+            body: message.body,
+            created_at: message.created_at,
+            edited_at: message.edited_at,
+            deleted_at: message.deleted_at,
+            spoiler: message.spoiler,
             attachments
         }
     }
@@ -58,16 +87,19 @@ impl MessageResponse {
 
 // Routing Methods //
 
-/// Post a message to a room
-/// - AuthUser: The message's author
-/// - app_state: Pool and socket registry
-/// - room_id: Room to post in
-/// - body: Message contents, nonce, and any attachments
-pub async fn post_message (
-    AuthUser(user_id): AuthUser,
+/// Posts a message to a room.
+///
+/// # Arguments
+///
+/// * `author_id` - The message's author.
+/// * `app_state` - Pool and socket registry.
+/// * `room_id` - Room to post in.
+/// * `body` - Message contents, nonce, and any attachments.
+pub async fn post_message(
+    AuthUser(author_id): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
-    Json(body): Json<PostMessageRequest>
+    Json(body): Json<PostMessageRequest>,
 ) -> Result<(StatusCode, Json<MessageResponse>)> {
 
     // Check for malformed nonce (check if hex)
@@ -83,10 +115,10 @@ pub async fn post_message (
     };
 
     // Attempt to post a message
-    let result = api::messages::post_message(
+    let result = api::messages::post(
         &app_state.pool,
         room_id,
-        user_id,
+        author_id,
         body.body.as_deref(),
         body.spoiler,
         nonce,
@@ -100,7 +132,7 @@ pub async fn post_message (
 
     // Get all attachments in message and attach to response
     let mut conn = app_state.pool.acquire().await?;
-    let files = api::messages::attachments::for_message(&mut *conn, message.id).await?;
+    let files = api::messages::attachments::for_message(&mut conn, message.id).await?;
     let attachments = files.into_iter().map(FileResponse::from).collect();
     let response = MessageResponse::new(message, attachments);
 
@@ -114,36 +146,33 @@ pub async fn post_message (
     Ok((status, Json(response)))
 }
 
-// Fetch Messages //
-
-#[derive(Deserialize)]
-pub struct FetchQuery {
-    pub after: Option<i64>,
-    pub before: Option<i64>,
-}
-
-/// Get one page of a room's messages
-/// - AuthUser: Who the messages are fetched for
-/// - pool: Pool of SQL Connections
-/// - room_id: Room to read from
-/// - query: Cursor to page from
-pub async fn fetch_messages (
+/// Gets one page of a room's messages.
+///
+/// # Arguments
+///
+/// * `user_id` - Who the messages are fetched for.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to read from.
+/// * `query` - Cursor to page from.
+pub async fn fetch_messages(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
-    Query(query): Query<FetchQuery>
+    Query(query): Query<FetchQuery>,
 ) -> Result<Json<Vec<MessageResponse>>> {
 
-    // Get http query (?before, ?after) and convert it into a cursor 
+    // Get http query (?before, ?after) and convert it into a cursor
     let cursor = match (query.after, query.before) {
         (None, None) => api::messages::Cursor::Latest,
         (Some(seq), None) => api::messages::Cursor::After(seq),
         (None, Some(seq)) => api::messages::Cursor::Before(seq),
-        (Some(_), Some(_)) => return Err(AppError::Validation(format!("cannot use before/after")))
+        (Some(_), Some(_)) => {
+            return Err(AppError::Validation("cannot use before/after".to_string()))
+        }
     };
 
     // Attempt to fetch messages
-    let result = api::messages::fetch_messages(&pool, user_id, room_id, cursor).await?;
+    let result = api::messages::fetch(&pool, room_id, user_id, cursor).await?;
 
     // Convert returned vector of internal messages into vector of HTTP message responses
     let mut response = Vec::with_capacity(result.len());
@@ -151,20 +180,24 @@ pub async fn fetch_messages (
         let attachments = files.into_iter().map(FileResponse::from).collect();
         response.push(MessageResponse::new(message, attachments));
     }
-    
+
     Ok(Json(response))
 }
 
-/// Delete a message
-/// - AuthUser: Who is deleting
-/// - app_state: Pool and socket registry
-/// - message_id: Message to delete
-pub async fn delete_message (
-    AuthUser(user_id): AuthUser,
+/// Deletes a message.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is deleting the message.
+/// * `app_state` - Pool and socket registry.
+/// * `message_id` - Message to delete.
+pub async fn delete_message(
+    AuthUser(caller_id): AuthUser,
     State(app_state): State<AppState>,
-    Path(message_id): Path<Uuid>
+    Path(message_id): Path<Uuid>,
 ) -> Result<StatusCode> {
-    let room_id = api::messages::delete_message(&app_state.pool, user_id, message_id).await?;
+
+    let room_id = api::messages::delete(&app_state.pool, message_id, caller_id).await?;
 
     let event = ServerEvent::MessageDeleted { room_id, message_id };
     websockets::broadcast(&app_state, room_id, event).await;
@@ -172,45 +205,35 @@ pub async fn delete_message (
     Ok(StatusCode::NO_CONTENT)
 }
 
-//  Edit Messages //
-
-#[derive(Deserialize)]
-pub struct EditMessageRequest {
-    pub body: Option<String>
-}
-
-#[derive(Serialize)]
-pub struct EditMessageResponse {
-    pub edited_at: i64
-}
-
-/// Edit a message (delta update)
-/// - AuthUser: Who is editing
-/// - app_state: Pool and socket registry
-/// - message_id: Message to edit
-/// - request: The new body
-pub async fn update_message (
-    AuthUser(user_id): AuthUser,
+/// Edits a message.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is editing the message.
+/// * `app_state` - Pool and socket registry.
+/// * `message_id` - Message to edit.
+/// * `request` - The new body.
+pub async fn update_message(
+    AuthUser(caller_id): AuthUser,
     State(app_state): State<AppState>,
     Path(message_id): Path<Uuid>,
-    Json(request): Json<EditMessageRequest>
+    Json(request): Json<EditMessageRequest>,
 ) -> Result<Json<EditMessageResponse>> {
 
-    let result = api::messages::edit_message(
+    let result = api::messages::edit(
         &app_state.pool,
-        user_id,
         message_id,
+        caller_id,
         request.body.as_deref(),
     ).await?;
 
     let event = ServerEvent::MessageEdited {
         room_id: result.room_id,
-        message_id: message_id,
+        message_id,
         body: request.body,
         edited_at: result.edited_at
     };
     websockets::broadcast(&app_state, result.room_id, event).await;
 
     Ok(Json(EditMessageResponse { edited_at: result.edited_at }))
-
 }

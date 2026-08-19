@@ -1,45 +1,66 @@
+//! The `room_invites` table: who has been offered access to a room.
+
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{Permission, Permissions, RoomInvite};
+use crate::models::{Permission, Permissions};
 use crate::utils;
 
 // Data Structs //
 
-#[derive(sqlx::FromRow, Serialize)] 
-pub struct RoomInviteEntry {
+/// One invite a room has issued.
+#[derive(sqlx::FromRow, Serialize)]
+pub struct Issued {
     pub user_id: Uuid,
     pub invited_by: Uuid,
     pub created_at: i64,
     pub expires_at: Option<i64>,
 }
 
+/// One invite a user has received, with the room's name joined in.
+#[derive(sqlx::FromRow, Serialize)]
+pub struct Received {
+    pub room_id: Uuid,
+    pub room_name: Option<String>,
+    pub invited_by: Uuid,
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
+}
 
 // API Methods //
 
-/// Invites a user to a room and store the invite request
-/// to the room invites table.
-/// - pool: Pool of SQL Connections
-/// - room_id: The room invited to
-/// - invitee: The user who is being invited
-/// - inviter: The user who made the invite
-/// - expire_delta: How much time (in ms) an invite has before it expires
-///     (based on invite creation time + expire delta) / or if at all
+/// Invites a user to a room.
+///
+/// A repeat invite for the same user overwrites the stored issuer and expiry.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room being invited to.
+/// * `caller_id` - Who is issuing the invite.
+/// * `target_id` - Who is being invited.
+/// * `expire_delta` - How long (in ms) the invite lasts from now, or `None` to
+///   never expire.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller lacks `Permission::Invite`, and
+/// `AppError::Validation` if the caller invites themselves.
 pub async fn create(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
-    invitee: Uuid,
-    inviter: Uuid,
-    expire_delta: Option<i64>
+    caller_id: Uuid,
+    target_id: Uuid,
+    expire_delta: Option<i64>,
 ) -> Result<()> {
 
     let mut tx = pool.begin().await?;
 
     // Check if user has permission to create an invite
-    let perms = db::effective_permissions(&mut *tx, inviter, room_id).await?;
-    can_invite(perms, invitee, inviter)?;
+    let perms = db::effective_permissions(&mut tx, room_id, caller_id).await?;
+    can_invite(perms, caller_id, target_id)?;
 
     // Create invite
     let now = utils::now_ms();
@@ -55,8 +76,8 @@ pub async fn create(
         " // Re-invites update table
     )
     .bind(room_id)
-    .bind(invitee)
-    .bind(inviter)
+    .bind(target_id)
+    .bind(caller_id)
     .bind(now)
     .bind(expires_at)
     .execute(&mut *tx)
@@ -66,20 +87,22 @@ pub async fn create(
     tx.commit().await?;
 
     Ok(())
-
 }
 
-/// Get list of room invites available to user
-/// - pool: Pool of SQL Connections
-/// - user_id: ID of user who is receiving invites
+/// Lists the unexpired invites addressed to a user, across every room.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `user_id` - User receiving the invites.
 pub async fn list_for_user(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
-) -> Result<Vec<RoomInvite>> {
+) -> Result<Vec<Received>> {
 
     let now = utils::now_ms();
     let mut conn = pool.acquire().await?;
-    let invites: Vec<RoomInvite> = sqlx::query_as(
+    let invites: Vec<Received> = sqlx::query_as(
         "
         SELECT i.room_id, r.name AS room_name, i.invited_by, i.created_at, i.expires_at
         FROM room_invites i
@@ -94,15 +117,17 @@ pub async fn list_for_user(
     .await?;
 
     Ok(invites)
-
 }
 
-/// Whether the user has an invite to the room that has not expired
-/// - conn: Connection to SQL DB
-/// - room_id: Room the invite is to
-/// - user_id: User the invite is addressed to
-/// - now: Time the expiry is measured against
-pub async fn has_unexpired_invite(
+/// Reports whether a user holds an invite to a room that has not expired.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room the invite is to.
+/// * `user_id` - User the invite is addressed to.
+/// * `now` - Time the expiry is measured against.
+pub async fn exists(
     conn: &mut sqlx::SqliteConnection,
     room_id: Uuid,
     user_id: Uuid,
@@ -127,21 +152,30 @@ pub async fn has_unexpired_invite(
     Ok(exists)
 }
 
-/// List all invitations associated with the given room
-/// - pool: Pool of SQL Connections
-/// - user_id: User making request
-/// - room_id: Room to query
+/// Lists the unexpired invites a room has issued.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to query.
+/// * `caller_id` - Who is requesting the list.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller lacks `Permission::Invite`.
 pub async fn list(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
-    room_id: Uuid
-) -> Result<Vec<RoomInviteEntry>> {
+    room_id: Uuid,
+    caller_id: Uuid,
+) -> Result<Vec<Issued>> {
 
     let mut conn = pool.acquire().await?;
-    require_invite_permission(&mut conn, user_id, room_id).await?;
+
+    // Reading the list requires Permission::Invite
+    require_permission(&mut conn, room_id, caller_id).await?;
 
     let now = utils::now_ms();
-    let entries: Vec<RoomInviteEntry> = sqlx::query_as(
+    let entries: Vec<Issued> = sqlx::query_as(
         "
         SELECT user_id, invited_by, created_at, expires_at
         FROM room_invites
@@ -156,54 +190,72 @@ pub async fn list(
     Ok(entries)
 }
 
-/// Decline an invite the caller received
-/// - pool: Pool of SQL Connections
-/// - user_id: Recipient of the invite
-/// - room_id: Room the invite is to
+/// Declines an invite the caller received.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the invite is to.
+/// * `caller_id` - Recipient of the invite.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if the caller holds no invite to the room.
 pub async fn decline(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
     room_id: Uuid,
+    caller_id: Uuid,
 ) -> Result<()> {
 
     let mut conn = pool.acquire().await?;
-    if !delete(&mut conn, user_id, room_id).await? {
-        return Err(AppError::NotFound)
+    if !delete(&mut conn, room_id, caller_id).await? {
+        return Err(AppError::NotFound);
     }
 
     Ok(())
 }
 
-/// Withdraw an invite the caller's room issued
-/// - pool: Pool of SQL Connections
-/// - caller_id: User withdrawing the invite
-/// - room_id: Room the invite is to
-/// - invitee: User the invite was addressed to
+/// Withdraws an invite the caller's room issued.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the invite is to.
+/// * `caller_id` - Who is withdrawing the invite.
+/// * `target_id` - User the invite was addressed to.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller lacks `Permission::Invite`, and
+/// `AppError::NotFound` if the target holds no invite to the room.
 pub async fn revoke(
     pool: &sqlx::SqlitePool,
-    caller_id: Uuid,
     room_id: Uuid,
-    invitee: Uuid
+    caller_id: Uuid,
+    target_id: Uuid,
 ) -> Result<()> {
 
     let mut conn = pool.acquire().await?;
-    require_invite_permission(&mut conn, caller_id, room_id).await?;
+    require_permission(&mut conn, room_id, caller_id).await?;
 
-    if !delete(&mut conn, invitee, room_id).await? {
-        return Err(AppError::NotFound)
+    if !delete(&mut conn, room_id, target_id).await? {
+        return Err(AppError::NotFound);
     }
 
     Ok(())
 }
 
-/// Delete user from room invite table
-/// - conn: Connection to SQL DB
-/// - user_id: Recipient of invite
-/// - room_id: Related room of invite
+/// Deletes a user's invite to a room, returning false when there was none.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room the invite is to.
+/// * `user_id` - Recipient of the invite.
 pub async fn delete(
     conn: &mut sqlx::SqliteConnection,
+    room_id: Uuid,
     user_id: Uuid,
-    room_id: Uuid
 ) -> Result<bool> {
 
     let result = sqlx::query("DELETE FROM room_invites WHERE room_id = ?1 AND user_id = ?2")
@@ -217,17 +269,24 @@ pub async fn delete(
 
 // Helper Methods //
 
-/// Reject the caller if they cannot issue invites for the room
-/// - conn: Connection to SQL DB
-/// - user_id: User being checked
-/// - room_id: Room the permission applies to
-async fn require_invite_permission(
+/// Rejects the caller if they cannot issue invites for the room.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room the permission applies to.
+/// * `caller_id` - User being checked.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller lacks `Permission::Invite`.
+async fn require_permission(
     conn: &mut sqlx::SqliteConnection,
-    user_id: Uuid,
     room_id: Uuid,
+    caller_id: Uuid,
 ) -> Result<()> {
 
-    let perms = db::effective_permissions(&mut *conn, user_id, room_id).await?;
+    let perms = db::effective_permissions(&mut *conn, room_id, caller_id).await?;
     if !perms.is_some_and(|p| p.has(Permission::Invite)) {
         return Err(AppError::Forbidden);
     }
@@ -235,26 +294,34 @@ async fn require_invite_permission(
     Ok(())
 }
 
-/// Check if inviter has permission to create invites
-/// - perms: Permission mask inviter has
-/// - invitee: User who is being invited
-/// - inviter: User who is creating invite
-fn can_invite(perms: Option<Permissions>, invitee: Uuid, inviter: Uuid) -> Result<()> {
+/// Checks whether the caller may invite the target.
+///
+/// # Arguments
+///
+/// * `perms` - Caller's resolved permissions, `None` when they are not a member.
+/// * `caller_id` - Who is issuing the invite.
+/// * `target_id` - Who is being invited.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller is not a member or lacks
+/// `Permission::Invite`, and `AppError::Validation` if the two ids are equal.
+fn can_invite(perms: Option<Permissions>, caller_id: Uuid, target_id: Uuid) -> Result<()> {
 
     // Permissions could not be found
     let Some(perms) = perms else {
         return Err(AppError::Forbidden);
     };
 
-    // Inviter tries to invite themselves
-    if invitee == inviter {
-        return Err(AppError::Validation("cannot invite yourself".to_string()))
+    // Caller tries to invite themselves
+    if caller_id == target_id {
+        return Err(AppError::Validation("cannot invite yourself".to_string()));
     }
 
-    // If inviter does not have invite permissions
+    // If caller does not have invite permissions
     if !perms.has(Permission::Invite) {
-        return Err(AppError::Forbidden)
+        return Err(AppError::Forbidden);
     }
 
-    return Ok(())
+    Ok(())
 }

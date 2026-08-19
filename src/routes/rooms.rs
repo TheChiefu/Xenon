@@ -1,3 +1,5 @@
+//! HTTP handlers for rooms and the tables scoped to a single room.
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -5,116 +7,152 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use super::{AppState, AuthUser, websockets};
-use crate::api::rooms::bans::RoomBanEntry;
-use crate::routes::websockets::ServerEvent;
-use crate::api::rooms::invites::RoomInviteEntry;
-use crate::{api, config};
+use crate::api::rooms::bans::Entry as BanEntry;
+use crate::api::rooms::invites::{Issued, Received};
+use crate::api::rooms::members::Entry as MemberEntry;
 use crate::error::Result;
-use crate::models::{Permission, Permissions, Room, RoomInvite, RoomMember, Visibility};
-
+use crate::models::{Permission, Permissions, Room, Visibility};
+use crate::routes::websockets::ServerEvent;
+use crate::routes::{websockets, AppState, AuthUser};
+use crate::{api, config};
 
 // Data Structs //
 
+/// POST body for creating a room.
 #[derive(Deserialize)]
-pub struct CreateRoomRequest { // POST body
+pub struct CreateRoomRequest {
     pub name: Option<String>,
     pub visibility: Visibility,
     pub default_permissions: Vec<Permission>,
     pub claim_all: bool,
 }
 
+/// POST body for inviting a user to a room.
 #[derive(Deserialize)]
-pub struct CreateRoomInvite { // POST body
+pub struct CreateRoomInvite {
     pub invitee: Uuid,
     pub expire_delta: Option<i64>
 }
 
+/// POST body for banning a user from a room.
+#[derive(Deserialize)]
+pub struct CreateRoomBan {
+    pub target_id: Uuid,
+    pub reason: Option<String>,
+    pub expire_delta: Option<i64>
+}
+
+/// Response carrying the id of a newly created room.
 #[derive(Serialize)]
 pub struct CreateRoomResponse {
     pub id: Uuid,
 }
 
+/// Query string for a paged room listing.
 #[derive(Deserialize)]
 pub struct DirectoryQuery {
     pub after: Option<Uuid>,
     pub limit: Option<i64>
 }
 
-#[derive(Deserialize)]
-pub struct CreateRoomBan { // POST Body
-    pub target_id: Uuid,
-    pub reason: Option<String>,
-    pub expire_delta: Option<i64>
-}
-
-
 // Routing Methods //
 
-/// Create a room
-/// - user_id: The room's creator
-/// - pool: Pool of SQL Connections
-/// - body: Properties to create the room with
+/// Creates a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - The room's creator.
+/// * `pool` - Pool of SQL connections.
+/// * `body` - Properties to create the room with.
 pub async fn create_room(
-    AuthUser(user_id): AuthUser,
+    AuthUser(caller_id): AuthUser,
     State(pool): State<SqlitePool>,
-    Json(body): Json<CreateRoomRequest>
+    Json(body): Json<CreateRoomRequest>,
 ) -> Result<(StatusCode, Json<CreateRoomResponse>)> {
 
     let default_permissions = Permissions::from_list(&body.default_permissions);
 
     // Check if creator wants to inherit default permissions
     // or have full access to room (Some - Full / None - Inherit)
-    let creator_permissions = body.claim_all.then_some(Permissions::ALL);
+    let caller_permissions = body.claim_all.then_some(Permissions::ALL);
 
     // Attempt to create room
     let id = api::rooms::create(
         &pool,
-        user_id,
+        caller_id,
         body.name.as_deref(),
-        creator_permissions,
+        caller_permissions,
         default_permissions,
         body.visibility
     ).await?;
 
-    Ok((StatusCode::CREATED, Json(CreateRoomResponse {id})))
+    Ok((StatusCode::CREATED, Json(CreateRoomResponse { id })))
 }
 
-/// Join a room
-/// - user_id: The user joining
-/// - pool: Pool of SQL Connections
-/// - room_id: Room to join
+/// Joins a room.
+///
+/// # Arguments
+///
+/// * `user_id` - The user joining.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to join.
 pub async fn join_room(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
-    Path(room_id): Path<Uuid>
+    Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
 
-    api::rooms::join(&pool, user_id, room_id).await?;
+    api::rooms::join(&pool, room_id, user_id).await?;
+
     Ok(StatusCode::OK)
 }
 
-/// List members within a room
-/// - user_id: User making request to authenticate against
-/// - pool: Pool of SQL Connections
-/// - room_id: Which room to list from
-pub async fn list_members (
+/// Leaves a room.
+///
+/// # Arguments
+///
+/// * `user_id` - The user leaving.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to leave.
+pub async fn leave_room(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
-    Path(room_id): Path<Uuid>
-) -> Result<Json<Vec<RoomMember>>> {
+    Path(room_id): Path<Uuid>,
+) -> Result<StatusCode> {
 
-    let members = api::rooms::members::list(&pool, user_id, room_id).await?;
+    api::rooms::leave(&pool, room_id, user_id).await?;
+
+    Ok(StatusCode::OK)
+}
+
+/// Lists the members of a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - User making the request.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to list from.
+pub async fn list_members(
+    AuthUser(caller_id): AuthUser,
+    State(pool): State<SqlitePool>,
+    Path(room_id): Path<Uuid>,
+) -> Result<Json<Vec<MemberEntry>>> {
+
+    let members = api::rooms::members::list(&pool, room_id, caller_id).await?;
+
     Ok(Json(members))
 }
 
-/// Set a user's permission in a room
-/// - caller_id: Who is attempting to set permissions
-/// - pool: Pool of SQL Connections
-/// - room_id: Room to make changes on
-/// - target_id: Who's permission are being set
-/// - body: Permissions being updated
-pub async fn set_permissions (
+/// Sets a user's permissions in a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is setting the permissions.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the permissions apply to.
+/// * `target_id` - Whose permissions are being set.
+/// * `body` - Permissions the target receives.
+pub async fn set_permissions(
     AuthUser(caller_id): AuthUser,
     State(pool): State<SqlitePool>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
@@ -123,40 +161,33 @@ pub async fn set_permissions (
 
     let perms = Permissions::from_list(&body);
     api::rooms::members::set_permissions(&pool, room_id, caller_id, target_id, perms).await?;
-    Ok(StatusCode::OK)
 
-}
-
-/// Leave a room
-/// - user_id: The user leaving
-/// - pool: Pool of SQL Connections
-/// - room_id: Room to leave
-pub async fn leave_room (
-    AuthUser(user_id): AuthUser,
-    State(pool): State<SqlitePool>,
-    Path(room_id): Path<Uuid>
-) -> Result<StatusCode> {
-
-    api::rooms::leave(&pool, user_id, room_id).await?;
     Ok(StatusCode::OK)
 }
 
-/// Get the rooms the caller is a member of
-/// - user_id: Whose rooms to list
-/// - pool: Pool of SQL Connections
-pub async fn list_my_rooms (
+/// Gets the rooms the caller is a member of.
+///
+/// # Arguments
+///
+/// * `user_id` - Whose rooms to list.
+/// * `pool` - Pool of SQL connections.
+pub async fn list_my_rooms(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<Room>>> {
 
-    let rooms = api::rooms::list_my_rooms(&pool, user_id).await?;
+    let rooms = api::rooms::list_mine(&pool, user_id).await?;
+
     Ok(Json(rooms))
 }
 
-/// Get one page of the Public and Locked rooms on the server
-/// - pool: Pool of SQL Connections
-/// - query: Cursor to page from, and how many rooms to return
-pub async fn list_discoverable_rooms (
+/// Gets one page of the Public and Locked rooms on the server.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `query` - Cursor to page from, and how many rooms to return.
+pub async fn list_discoverable_rooms(
     AuthUser(_): AuthUser,
     State(pool): State<SqlitePool>,
     Query(query): Query<DirectoryQuery>,
@@ -166,120 +197,144 @@ pub async fn list_discoverable_rooms (
     let limit = query.limit.unwrap_or(max).clamp(1, max);
 
     let rooms = api::rooms::list_discoverable(&pool, query.after, limit).await?;
+
     Ok(Json(rooms))
 }
 
-/// Invite a user to a room
-/// - inviter: Who is issuing the invite
-/// - app_state: Pool of SQL Connections & Event Handler
-/// - room_id: Room being invited to
-/// - body: Who to invite, and how long the invite lasts
-pub async fn invite_user (
-    AuthUser(inviter): AuthUser,
+/// Invites a user to a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is issuing the invite.
+/// * `app_state` - Pool and socket registry.
+/// * `room_id` - Room being invited to.
+/// * `body` - Who to invite, and how long the invite lasts.
+pub async fn invite_user(
+    AuthUser(caller_id): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
-    Json(body): Json<CreateRoomInvite>
+    Json(body): Json<CreateRoomInvite>,
 ) -> Result<StatusCode> {
 
     api::rooms::invites::create(
         &app_state.pool,
         room_id,
+        caller_id,
         body.invitee,
-        inviter,
         body.expire_delta
     ).await?;
 
-    let event = ServerEvent::Invited { room_id, invited_by: inviter };
+    let event = ServerEvent::Invited { room_id, invited_by: caller_id };
     websockets::notify_user(&app_state, body.invitee, event).await;
 
     Ok(StatusCode::CREATED)
 }
 
-/// Get room invites the caller is a recipient of
-/// - user_id: User who receives invites
-/// - pool: Pool of SQL Connections
+/// Gets the room invites the caller is a recipient of.
+///
+/// # Arguments
+///
+/// * `user_id` - User who receives the invites.
+/// * `pool` - Pool of SQL connections.
 pub async fn list_my_invites(
     AuthUser(user_id): AuthUser,
     State(pool): State<SqlitePool>,
-) -> Result<Json<Vec<RoomInvite>>> {
+) -> Result<Json<Vec<Received>>> {
 
     let invites = api::rooms::invites::list_for_user(&pool, user_id).await?;
-    Ok(Json(invites))
 
+    Ok(Json(invites))
 }
 
-/// Get list of invites total in a given room
-/// - user_id: User making request
-/// - pool: Pool of SQL Connections
-/// - room_id: Room to look in
+/// Gets the invites a room has issued.
+///
+/// # Arguments
+///
+/// * `caller_id` - User making the request.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to look in.
 pub async fn list_invites(
-    AuthUser(user_id): AuthUser,
-    State(pool): State<SqlitePool>,
-    Path(room_id): Path<Uuid>,
-) -> Result<Json<Vec<RoomInviteEntry>>> {
-
-    let invites = api::rooms::invites::list(&pool, user_id, room_id).await?;
-    Ok(Json(invites))
-
-}
-
-/// Decline a room invite
-/// - user_id: User making request
-/// - pool: Pool of SQL Connections
-/// - room_id: Relevant room
-pub async fn decline(
-    AuthUser(user_id): AuthUser,
-    State(pool): State<SqlitePool>,
-    Path(room_id): Path<Uuid>,
-) -> Result<StatusCode> {
-
-    api::rooms::invites::decline(&pool, user_id, room_id).await?;
-    Ok(StatusCode::NO_CONTENT)
-
-}
-
-/// Withdraw an invite the room issued
-/// - caller_id: User withdrawing the invite
-/// - pool: Pool of SQL Connections
-/// - room_id: Room the invite is to
-/// - invitee: User the invite was addressed to
-pub async fn revoke(
     AuthUser(caller_id): AuthUser,
     State(pool): State<SqlitePool>,
-    Path((room_id, invitee)): Path<(Uuid, Uuid)>,
+    Path(room_id): Path<Uuid>,
+) -> Result<Json<Vec<Issued>>> {
+
+    let invites = api::rooms::invites::list(&pool, room_id, caller_id).await?;
+
+    Ok(Json(invites))
+}
+
+/// Declines a room invite.
+///
+/// # Arguments
+///
+/// * `caller_id` - Recipient of the invite.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the invite is to.
+pub async fn decline_invite(
+    AuthUser(caller_id): AuthUser,
+    State(pool): State<SqlitePool>,
+    Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
 
-    api::rooms::invites::revoke(&pool, caller_id, room_id, invitee).await?;
+    api::rooms::invites::decline(&pool, room_id, caller_id).await?;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Get list of user banned in a given room
-/// - user_id: User making request
-/// - pool: Pool of SQL Connections
-/// - room_id: Room to look in
-pub async fn list_bans(
-    AuthUser(user_id): AuthUser,
+/// Withdraws an invite the room issued.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is withdrawing the invite.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the invite is to.
+/// * `target_id` - User the invite was addressed to.
+pub async fn revoke_invite(
+    AuthUser(caller_id): AuthUser,
     State(pool): State<SqlitePool>,
-    Path(room_id): Path<Uuid>
-) -> Result<Json<Vec<RoomBanEntry>>> {
+    Path((room_id, target_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode> {
 
-    let bans = api::rooms::bans::list(&pool, room_id, user_id).await?;
+    api::rooms::invites::revoke(&pool, room_id, caller_id, target_id).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Gets the users banned from a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - User making the request.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to look in.
+pub async fn list_bans(
+    AuthUser(caller_id): AuthUser,
+    State(pool): State<SqlitePool>,
+    Path(room_id): Path<Uuid>,
+) -> Result<Json<Vec<BanEntry>>> {
+
+    let bans = api::rooms::bans::list(&pool, room_id, caller_id).await?;
+
     Ok(Json(bans))
 }
 
-/// Ban a user from a room
-/// - caller_id: Who is issuing the ban
-/// - app_state: Pool of SQL Connections & Event Handler
-/// - room_id: Room being banned from
-/// - body: Who to ban, how long the ban lasts, and the reason
+/// Bans a user from a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is issuing the ban.
+/// * `app_state` - Pool and socket registry.
+/// * `room_id` - Room being banned from.
+/// * `body` - Who to ban, how long the ban lasts, and the reason.
 pub async fn ban_user(
     AuthUser(caller_id): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
-    Json(body): Json<CreateRoomBan>
+    Json(body): Json<CreateRoomBan>,
 ) -> Result<StatusCode> {
 
-    api::rooms::bans::ban_user(
+    api::rooms::bans::create(
         &app_state.pool,
         room_id,
         caller_id,
@@ -294,23 +349,21 @@ pub async fn ban_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Unban a user from a room
-/// - caller_id: Who is issuing the ban
-/// - pool: Pool of SQL Connections
-/// - room_id: Room being unbanned from
-/// - target_id: Who is being unbanned
+/// Lifts a user's ban on a room.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is lifting the ban.
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room being unbanned from.
+/// * `target_id` - Who is being unbanned.
 pub async fn unban_user(
     AuthUser(caller_id): AuthUser,
     State(pool): State<SqlitePool>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
 
-    api::rooms::bans::unban_user(
-        &pool,
-        room_id,
-        caller_id,
-        target_id
-    ).await?;
+    api::rooms::bans::revoke(&pool, room_id, caller_id, target_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

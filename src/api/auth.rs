@@ -1,26 +1,42 @@
+//! Registration and login.
+
 use uuid::Uuid;
 
+use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::GlobalRole;
-use crate::{db, utils, validate};
+use crate::utils;
+use crate::validate;
 
+// API Methods //
 
-/// Redeems an invite and creates the account, returning the new id and a session.
+/// Redeems a registration code and creates the account, returning the new id
+/// and a session token.
 ///
-/// The invite is claimed before the user is inserted so that retrieving "UsernameTaken"
-/// costs a valid invite (stops an attacker from brute forcing finding valid usernames).
-/// - pool: Pool of SQL Connections
-/// - code: Registration code being redeemed
-/// - username: Login name being claimed
-/// - display_name: Name shown to other users
-/// - password: Password to hash and store
+/// The code is claimed before the user is inserted, so reaching `UsernameTaken`
+/// costs a valid code.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `code` - Registration code being redeemed.
+/// * `username` - Login name being claimed.
+/// * `display_name` - Name shown to other users.
+/// * `password` - Password to hash and store.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if a field is outside its length limits or
+/// the username holds a disallowed character, `AppError::InvalidInvite` if the
+/// code is unknown, revoked, expired, or spent, and `AppError::UsernameTaken`
+/// if the username exists.
 pub async fn register(
     pool: &sqlx::SqlitePool,
     code: &str,
     username: &str,
     display_name: &str,
-    password: &str
- ) -> Result<(Uuid, String)> {
+    password: &str,
+) -> Result<(Uuid, String)> {
 
     // Format Validation
     let username = username.trim();
@@ -30,7 +46,7 @@ pub async fn register(
     validate::password(password)?;
 
     // Open transaction
-    let mut tx = pool.begin().await?; // Transaction
+    let mut tx = pool.begin().await?;
 
     // Claim invite first
     let claimed = sqlx::query(
@@ -59,7 +75,7 @@ pub async fn register(
     // Create user
     let id = Uuid::now_v7();
     db::insert_user(
-        &mut *tx,
+        &mut tx,
         id,
         username,
         display_name,
@@ -68,19 +84,28 @@ pub async fn register(
     ).await?;
 
     // Create session key
-    let token = db::create_session(&mut *tx, id).await?;
+    let token = db::create_session(&mut tx, id).await?;
     tx.commit().await?;
+
     Ok((id, token))
 }
 
 /// Verifies credentials and returns a new session token.
 ///
-/// Every failure returns the same error, and an unknown username runs
-/// "burn_verify" so it costs the same time as a wrong password
-/// (ie. invalid username or password takes same ms response, hidden from attacker)
-/// - pool: Pool of SQL Connections
-/// - username: Login name to authenticate
-/// - password: Password to verify against the stored hash
+/// An unknown username runs `burn_verify`, so it costs the same time as a wrong
+/// password and both return the same error.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `username` - Login name to authenticate.
+/// * `password` - Password to verify against the stored hash.
+///
+/// # Errors
+///
+/// Returns `AppError::InvalidCredentials` if the username is unknown or the
+/// password does not match, and `AppError::Hash` if the stored hash is
+/// unreadable.
 pub async fn login(
     pool: &sqlx::SqlitePool,
     username: &str,
@@ -106,13 +131,13 @@ pub async fn login(
 
         // Found creds
         Ok((id, Some(hash))) => (id, hash),
-        
+
         // Not found, burn cycles to mask kind of API call
         Ok((_, None)) | Err(sqlx::Error::RowNotFound) => {
             utils::burn_verify(password);
             return Err(AppError::InvalidCredentials);
         }
-        
+
         // DB error, exit...
         Err(e) => return Err(AppError::Db(e))
     };
@@ -125,7 +150,7 @@ pub async fn login(
     }
 
     // Create session key
-    let token = db::create_session(&mut *conn, user_id).await?;
-    Ok(token)
+    let token = db::create_session(&mut conn, user_id).await?;
 
+    Ok(token)
 }

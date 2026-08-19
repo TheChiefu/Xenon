@@ -1,20 +1,25 @@
+//! The `messages` table.
+
 pub mod attachments;
 
 use uuid::Uuid;
 
+use crate::config;
+use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::{File, Message, Permission, Permissions};
-use crate::{config, db, utils, validate};
+use crate::utils;
+use crate::validate;
 
+// Data Structs //
 
-
-/// Cursor for message type
-/// - Latest: Give newest page
-/// - After: Reconnect (everything newer than seq)
-/// - Before: Scroll Up (page is older than seq)
+/// Which page of a room's history to read.
 pub enum Cursor {
+    /// Newest page.
     Latest,
+    /// Everything newer than the given seq, used on reconnect.
     After(i64),
+    /// The page older than the given seq, used when scrolling up.
     Before(i64)
 }
 
@@ -25,24 +30,36 @@ pub enum Posted {
     Duplicate(Message),
 }
 
-/// Outcome of an edit
+/// Outcome of an edit.
 pub struct Edited {
     pub room_id: Uuid,
     pub edited_at: i64,
 }
 
+// API Methods //
 
-// Primary Methods //
-
-/// Attempt to create a message
-/// - pool: SQL Pool
-/// - room_id: Where message is to be created
-/// - author_id: Who is creating the message
-/// - body: Contents of message
-/// - spoiler: Whether the message renders blurred until revealed
-/// - client_nonce: Client's per-composition id, reused on retry
-/// - attachments: Files the message carries
-pub async fn post_message(
+/// Posts a message to a room.
+///
+/// A retry carrying a `client_nonce` the server already stored returns the
+/// stored message instead of writing a second one.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the message is posted to.
+/// * `author_id` - Who is posting.
+/// * `body` - Message contents, `None` when the message is attachments only.
+/// * `spoiler` - Whether the message renders blurred until revealed.
+/// * `client_nonce` - Client's per-composition id, reused on retry.
+/// * `attachments` - Files the message carries.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if the message has neither body nor
+/// attachments, exceeds a length or count limit, or repeats a file id, and
+/// `AppError::Forbidden` if the author lacks `Permission::Post`, or
+/// `Permission::Attach` on a message carrying files.
+pub async fn post(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
     author_id: Uuid,
@@ -59,7 +76,7 @@ pub async fn post_message(
     let mut tx = pool.begin().await?;
 
     // Check user perms
-    let perms = db::effective_permissions(&mut *tx, author_id, room_id).await?;
+    let perms = db::effective_permissions(&mut tx, room_id, author_id).await?;
     if !can_post(perms, !attachments.is_empty()) {
         return Err(AppError::Forbidden);
     }
@@ -115,23 +132,32 @@ pub async fn post_message(
     Ok(posted)
 }
 
-/// Retrieves vector of messages (and possible attachments) within
-/// a given cursor range and room to a specific user.
-/// - pool: To get connections from
-/// - user_id: Who to fetch the messages for
-/// - room_id: What room to get messages from
-/// - cursor: Range of messages to look for (before, after, or latest)
-pub async fn fetch_messages(
+/// Reads one page of a room's messages, each with the files attached to it.
+///
+/// Messages are always returned oldest first, whichever direction the cursor
+/// paged in.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to read from.
+/// * `user_id` - Who the messages are fetched for.
+/// * `cursor` - Which page to read.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the user is not a member of the room.
+pub async fn fetch(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
     room_id: Uuid,
+    user_id: Uuid,
     cursor: Cursor,
 ) -> Result<Vec<(Message, Vec<File>)>> {
 
     let mut conn = pool.acquire().await?;
 
     // Check if user has permission to access the room
-    let perms = db::effective_permissions(&mut *conn, user_id, room_id).await?;
+    let perms = db::effective_permissions(&mut conn, room_id, user_id).await?;
     if perms.is_none() {
         return Err(AppError::Forbidden);
     }
@@ -164,23 +190,25 @@ pub async fn fetch_messages(
 
     // Fetch messages and insert into vector
     let mut messages: Vec<Message> = sqlx::query_as(query)
-        .bind(room_id)
-        .bind(anchor)
-        .bind(config::get().paging.message_page)
-        .fetch_all(&mut *conn)
-        .await?;
+    .bind(room_id)
+    .bind(anchor)
+    .bind(config::get().paging.message_page)
+    .fetch_all(&mut *conn)
+    .await?;
 
     // The descending query returns newest first, callers always get ascending
-    if older { messages.reverse(); }
+    if older {
+        messages.reverse();
+    }
 
     // Empty message list, exit
     if messages.is_empty() {
-        return Ok(Vec::new())
+        return Ok(Vec::new());
     }
 
     // Get attachments for all messages on page
     let low = messages[0].seq;
-    let high = messages[messages.len() -1].seq;
+    let high = messages[messages.len() - 1].seq;
     let mut pairs = attachments::for_message_range(&mut conn, room_id, low, high).await?;
     let mut result = Vec::with_capacity(messages.len());
     for message in messages {
@@ -191,22 +219,34 @@ pub async fn fetch_messages(
     Ok(result)
 }
 
-/// Delete a message, returning the room it was in
-/// - pool: To get connections from
-/// - user_id: Who is attempting to delete a message
-/// - message_id: What message to delete by id
-pub async fn delete_message(
+/// Tombstones a message, returning the room it was in.
+///
+/// The row stays, with its body and attachments cleared.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `message_id` - Message to delete.
+/// * `caller_id` - Who is deleting it.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if no such message exists, and
+/// `AppError::Forbidden` if the caller is neither the author nor a holder of
+/// `Permission::DeleteMsg`.
+pub async fn delete(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
     message_id: Uuid,
+    caller_id: Uuid,
 ) -> Result<Uuid> {
+
     let mut tx = pool.begin().await?;
-    let message = fetch_message(&mut tx, message_id).await?;
+    let message = fetch_by_id(&mut tx, message_id).await?;
     let room_id = message.room_id;
 
-    // If author has permission to delete
-    let perms = db::effective_permissions(&mut *tx, user_id, room_id).await?;
-    if !can_delete_message(perms, user_id, message.author_id) {
+    // If caller has permission to delete
+    let perms = db::effective_permissions(&mut tx, room_id, caller_id).await?;
+    if !can_delete(perms, caller_id, message.author_id) {
         return Err(AppError::Forbidden);
     }
 
@@ -226,10 +266,10 @@ pub async fn delete_message(
 
     // Message already deleted, so nothing below should run
     if tombstone_msg.rows_affected() == 0 {
-        return Ok(room_id)
+        return Ok(room_id);
     }
 
-    // Clear it's attachments
+    // Clear its attachments
     sqlx::query("DELETE FROM message_attachments WHERE message_id = ?1")
     .bind(message_id)
     .execute(&mut *tx)
@@ -245,18 +285,27 @@ pub async fn delete_message(
     tx.commit().await?;
 
     Ok(room_id)
-
 }
 
-/// Edit a message, returning the room it is in and when it was edited
-/// - pool: To get connections from
-/// - user_id: Who is attempting to edit a message
-/// - message_id: What message to edit is by id
-/// - body: New message contents
-pub async fn edit_message(
+/// Replaces a message body, returning the room it is in and when it was edited.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `message_id` - Message to edit.
+/// * `caller_id` - Who is editing it.
+/// * `body` - New message contents, `None` to leave attachments alone.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if the new body is over the length limit, or
+/// is absent on a message that carries no attachments; `AppError::Forbidden` if
+/// the caller is not the author; and `AppError::NotFound` if the message does
+/// not exist or is already a tombstone.
+pub async fn edit(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
     message_id: Uuid,
+    caller_id: Uuid,
     body: Option<&str>,
 ) -> Result<Edited> {
 
@@ -267,16 +316,17 @@ pub async fn edit_message(
     let mut tx = pool.begin().await?;
 
     // Check author
-    let message = fetch_message(&mut tx, message_id).await?;
+    let message = fetch_by_id(&mut tx, message_id).await?;
     let room_id = message.room_id;
 
-    // Does user have permission to edit the message
-    if message.author_id != user_id {
+    // Does caller have permission to edit the message
+    if message.author_id != caller_id {
         return Err(AppError::Forbidden);
     }
 
     // If there is no body, verify attachments are present
     if body.is_none() {
+
         // Check if original message has attachments
         let has_attachments: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE message_id = ?1)"
@@ -287,13 +337,13 @@ pub async fn edit_message(
 
         if !has_attachments {
             let err = "edited message body cannot be empty and have no attachments".to_string();
-            return Err(AppError::Validation(err))
+            return Err(AppError::Validation(err));
         }
     }
 
     // Update message
     let now = utils::now_ms();
-    let edited = sqlx::query (
+    let edited = sqlx::query(
         "
         UPDATE messages
         SET body = ?1, edited_at = ?2
@@ -311,25 +361,32 @@ pub async fn edit_message(
         return Err(AppError::NotFound);
     }
 
-    // Update Mutation Seqquence
+    // Update mutation sequence
     sqlx::query("UPDATE rooms SET mutation_seq = mutation_seq + 1 WHERE id = ?1")
-        .bind(room_id)
-        .execute(&mut *tx)
-        .await?;
+    .bind(room_id)
+    .execute(&mut *tx)
+    .await?;
 
     // Commit transaction
     tx.commit().await?;
 
     Ok(Edited { room_id, edited_at: now })
-
 }
-
 
 // Helper Methods //
 
-/// Check for invalid post properties
-/// - body: Contents of message (None when the message is attachments only)
-/// - attachments: Files the message carries
+/// Checks a post's shape before any write is in flight.
+///
+/// # Arguments
+///
+/// * `body` - Message contents, `None` when the message is attachments only.
+/// * `attachments` - Files the message carries.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if the message has neither body nor
+/// attachments, carries more attachments than the configured limit, repeats a
+/// file id, or has a body over the length limit.
 fn validate_post(body: Option<&str>, attachments: &[Uuid]) -> Result<()> {
 
     // No body or attachments
@@ -361,10 +418,13 @@ fn validate_post(body: Option<&str>, attachments: &[Uuid]) -> Result<()> {
     Ok(())
 }
 
-/// Reads back the message a nonce already stored
-/// - conn: Connection to SQL DB
-/// - author_id: Who sent it
-/// - client_nonce: ID per message sent
+/// Reads back the message a nonce already stored.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `author_id` - Who sent it.
+/// * `client_nonce` - Client's per-composition id.
 async fn fetch_by_nonce(
     conn: &mut sqlx::SqliteConnection,
     author_id: Uuid,
@@ -386,10 +446,17 @@ async fn fetch_by_nonce(
     Ok(message)
 }
 
-/// Reads a message by id
-/// - conn: Connection to SQL DB
-/// - message_id: Message to look up
-async fn fetch_message(
+/// Reads a message by id.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `message_id` - Message to look up.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if no such message exists.
+async fn fetch_by_id(
     conn: &mut sqlx::SqliteConnection,
     message_id: Uuid,
 ) -> Result<Message> {
@@ -412,9 +479,12 @@ async fn fetch_message(
     Ok(message)
 }
 
-/// Whether a user may post the message they sent
-/// - perms: The user's resolved permissions, None when they are not a member
-/// - has_attachments: Whether the message carries files
+/// Reports whether a user may post the message they sent.
+///
+/// # Arguments
+///
+/// * `perms` - The user's resolved permissions, `None` when they are not a member.
+/// * `has_attachments` - Whether the message carries files.
 fn can_post(perms: Option<Permissions>, has_attachments: bool) -> bool {
 
     // Not a member, so the room cannot be read either
@@ -435,21 +505,25 @@ fn can_post(perms: Option<Permissions>, has_attachments: bool) -> bool {
     true
 }
 
-fn can_delete_message(perms: Option<Permissions>, user_id: Uuid, author_id: Uuid) -> bool {
+/// Reports whether a user may delete a message.
+///
+/// # Arguments
+///
+/// * `perms` - The caller's resolved permissions, `None` when they are not a member.
+/// * `caller_id` - Who is deleting the message.
+/// * `author_id` - Who wrote the message.
+fn can_delete(perms: Option<Permissions>, caller_id: Uuid, author_id: Uuid) -> bool {
 
+    // Not a member, so the room cannot be read
     let Some(perms) = perms else {
         return false;
     };
 
-    // If the user is the same as author (self delete)
-    if user_id == author_id {
+    // Authors can always delete their own messages
+    if caller_id == author_id {
         return true;
     }
 
-    // If user is not the author (delete other's message)
-    if !perms.has(Permission::DeleteMsg) {
-        return false;
-    }
-
-    return true;
+    // Deleting someone else's message takes an explicit permission
+    perms.has(Permission::DeleteMsg)
 }

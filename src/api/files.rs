@@ -1,31 +1,52 @@
+//! The `files` table, and the bytes it points at on disk.
+
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
-use sqlx::SqlitePool;
-use tokio::{self, io::{AsyncRead, AsyncReadExt, AsyncWriteExt}};
+
 use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use uuid::Uuid;
 
 use crate::bytesize::ByteSize;
+use crate::config;
 use crate::error::{AppError, Result};
-use crate::{models::File, utils, config};
+use crate::models::File;
+use crate::utils;
 
+// Data Structs //
+
+/// Outcome of an upload. Bytes the server already holds return the stored row
+/// rather than writing a second copy.
 pub enum Stored {
     Created(File),
     Duplicate(File)
 }
 
-/// Produced by reading an upload
+/// Metadata produced by reading an upload.
 struct Stream {
     sha256: Vec<u8>,
     byte_size: i64,
     mime: &'static str
 }
 
+// API Methods //
 
-/// Stores an upload, returning the matching "files"
-/// entry if the bytes are already stored.
-/// - pool: Pool where uploaded file information is stored
-/// - file: What the name of the file is saved as
-/// - reader: Reader that reads byte stream of uploaded file
+/// Stores an upload, keyed on the hash of its bytes.
+///
+/// The stream is written to a temp file first, since the final path is the hash
+/// and is unknown until the last byte is read.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `filename` - Name the file is stored under.
+/// * `reader` - Byte stream of the uploaded file.
+///
+/// # Errors
+///
+/// Returns `AppError::TooLarge` if the stream passes the configured byte limit,
+/// `AppError::Validation` if it is empty, and `AppError::Io` if a disk
+/// operation fails.
 pub async fn store<R>(
     pool: &SqlitePool,
     filename: &str,
@@ -62,19 +83,27 @@ where
         return Err(e);
     }
     // NOTE: In the event of an orphaned file a sweeping event that looks for
-    // them (ie. no references in the DB) can delete them at a later point 
+    // them (ie. no references in the DB) can delete them at a later point
 
     // Insert file info into Database
     let mut tx = pool.begin().await?;
-    let stored = insert_file(&mut tx, filename, stream.sha256, stream.byte_size, &stream.mime).await?;
+    let stored = insert(&mut tx, filename, stream.sha256, stream.byte_size, stream.mime).await?;
     tx.commit().await?;
 
     Ok(stored)
 }
 
-/// Given a file ID attempt to fetch it from the DB, returns a reader stream
-/// - pool: Pool of SQL Connections
-/// - file_id: File to look up
+/// Reads a file's row and opens a handle to its bytes on disk.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `file_id` - File to look up.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if no such row exists, and `AppError::Io` if
+/// the bytes cannot be opened.
 pub async fn fetch(
     pool: &SqlitePool,
     file_id: Uuid,
@@ -94,7 +123,7 @@ pub async fn fetch(
     .await?;
 
     // No file found, report as not found error
-    let Some(file) = f else  {
+    let Some(file) = f else {
         return Err(AppError::NotFound);
     };
 
@@ -118,20 +147,39 @@ pub async fn fetch(
 
 // Helper Methods //
 
-/// Creates the shard directory and moves the temp file into it (via rename)
-/// - tmp_path: Current tmp file containing uploaded file data
-/// - shard_dir: Final directory where hex file is placed in
-/// - hex: Hex representation of file sha representing the file name 
+/// Creates the shard directory and renames the temp file into it.
+///
+/// # Arguments
+///
+/// * `tmp_path` - Temp file holding the uploaded bytes.
+/// * `shard_dir` - Directory the hex file is placed in.
+/// * `hex` - Hex representation of the file's hash, used as its name.
+///
+/// # Errors
+///
+/// Returns `AppError::Io` if the directory or the rename fails.
 async fn move_to_shard(tmp_path: &Path, shard_dir: &Path, hex: &str) -> Result<()> {
     tokio::fs::create_dir_all(shard_dir).await?;
     tokio::fs::rename(tmp_path, shard_dir.join(hex)).await?;
     Ok(())
 }
 
-/// Read file stream and create tmp file containing its data and return file metadata.
-/// - reader: Async reader
-/// - tmp_path: Path were local copy of streamed data is stored
-/// - max_bytes: Max allowable size on disk (file rejected if limit is reached while streaming)
+/// Reads a stream into a temp file, returning the metadata it gathered.
+///
+/// The MIME type is inferred from the leading bytes, falling back to
+/// `text/plain` for valid UTF-8 and `application/octet-stream` otherwise.
+///
+/// # Arguments
+///
+/// * `reader` - Byte stream of the uploaded file.
+/// * `tmp_path` - Path the local copy is written to.
+/// * `max_bytes` - Size the file is rejected at, checked while streaming.
+///
+/// # Errors
+///
+/// Returns `AppError::TooLarge` if the stream passes `max_bytes`,
+/// `AppError::Validation` if it holds no bytes, and `AppError::Io` if a read or
+/// write fails.
 async fn read_stream<R>(
     mut reader: R,
     tmp_path: &Path,
@@ -152,7 +200,9 @@ where
     // Loop over file bytes
     loop {
         let n = reader.read(&mut buffer).await?; // Read bytes (dynamic size)
-        if n == 0 { break; } // No more bytes, stop reading
+        if n == 0 {
+            break; // No more bytes, stop reading
+        }
         let chunk = &buffer[..n];
 
         // Infer matches leading bytes as file MIME
@@ -194,23 +244,31 @@ where
     })
 }
 
-/// Maps a hash to the directory holding it (such as files/ab/cd)
-/// - files_path: Path to permanent file location
-/// - hex: Hexadecimal representation of file to be stored
+/// Maps a hash to the directory holding it, such as `files/ab/cd`.
+///
+/// # Arguments
+///
+/// * `files_path` - Path to the permanent file location.
+/// * `hex` - Hex representation of the file's hash.
 fn create_shard_path(files_path: &str, hex: &str) -> PathBuf {
     Path::new(files_path)
         .join(&hex[0..2]) // Top Level first 2 hex chars
         .join(&hex[2..4]) // Second Level second 2 hex chars
 }
 
-/// Insert file metadata into "files" DB table.
-/// Returns a table entry based on the sha256 key
-/// - conn: Connection to SQL DB
-/// - filename: Name of file to store
-/// - sha256: Hashed representation used as dudupe key
-/// - byte_size: Size of file in bytes
-/// - mime: MIME type of file for clients to handle
-async fn insert_file(
+/// Writes a row to the `files` table, keyed on the hash of its bytes.
+///
+/// Bytes already stored return the existing row, so the `id` and `filename` are
+/// the ones from the first upload rather than the ones passed here.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `filename` - Name the file is stored under.
+/// * `sha256` - Hash of the bytes, used as the dedupe key.
+/// * `byte_size` - Size of the file in bytes.
+/// * `mime` - MIME type for clients to handle.
+async fn insert(
     conn: &mut sqlx::SqliteConnection,
     filename: &str,
     sha256: Vec<u8>,
@@ -241,8 +299,6 @@ async fn insert_file(
     // Nothing written means these bytes are already stored
     if affected == 0 {
 
-        // Keyed on sha256 alone. The stored file has the first uploader's id,
-        // never the one generated above
         let file = sqlx::query_as::<_, File>(
             "
             SELECT id, sha256, filename, mime, byte_size, created_at
@@ -257,21 +313,24 @@ async fn insert_file(
         return Ok(Stored::Duplicate(file));
     }
 
-    // If an insert occured, return newly created file info
+    // If an insert occurred, return newly created file info
     Ok(Stored::Created(
         File {
             id,
-            sha256: sha256.clone(),
+            sha256,
             filename: filename.to_string(),
             mime: mime.to_string(),
-            byte_size: byte_size,
+            byte_size,
             created_at: now
         }
     ))
 }
 
-/// If text has no magic bytes to infer,
-/// fallback to seeing if bytes are from text file
+/// Reports whether a chunk of bytes reads as UTF-8 text.
+///
+/// # Arguments
+///
+/// * `chunk` - Leading bytes of the file.
 fn is_utf8_text(chunk: &[u8]) -> bool {
 
     // Check for NULs

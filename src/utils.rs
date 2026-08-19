@@ -1,12 +1,29 @@
+//! Clock, random-token, and password-hashing helpers.
+
+use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{Error as PhcError, PasswordHasher, SaltString};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use sha2::{Digest, Sha256};
-use std::sync::LazyLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{AppError, Result};
 
+/// How many bytes a session token carries.
+const SESSION_TOKEN_BYTES: usize = 32;
+
+/// A session token in both the form the client keeps and the form the server stores.
+pub struct SessionToken {
+    pub secret: String, // Goes to client (never stored on server)
+    pub hash: [u8; 32] // Goes in sessions.token_hash (never leaves server)
+}
+
+/// Returns the current time in milliseconds since the Unix epoch.
+///
+/// # Panics
+///
+/// Panics if the system clock reads before 1970.
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -14,7 +31,7 @@ pub fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Generates invite code from uppercase alphanumerics
+/// Generates a registration code from uppercase alphanumerics.
 pub fn generate_invite_code() -> String {
     const CODE_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const CODE_LEN: usize = 12;
@@ -31,16 +48,32 @@ pub fn generate_invite_code() -> String {
 
 // Password Management //
 
-/// Hashes a password with Argon2id, returning a PHC string
+/// Hashes a password with Argon2id, returning a PHC string.
+///
+/// # Arguments
+///
+/// * `password` - Password to hash.
+///
+/// # Errors
+///
+/// Returns `AppError::Hash` if the algorithm cannot run.
 pub fn hash_password(password: &str) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default().hash_password(password.as_bytes(), &salt)?;
     Ok(hash.to_string())
 }
 
-/// Ok (true)  - Password Matches
-/// Ok (false) - Password does not match
-/// Err        - Stored hash is unusable (corrupt / algorithm can't run)
+/// Reports whether a password matches a stored hash.
+///
+/// # Arguments
+///
+/// * `password` - Password to check.
+/// * `stored_hash` - PHC string read from the database.
+///
+/// # Errors
+///
+/// Returns `AppError::Hash` if the stored hash is unreadable or the algorithm
+/// cannot run.
 pub fn verify_password(password: &str, stored_hash: &str) -> Result<bool> {
     let parsed = PasswordHash::new(stored_hash)?;
 
@@ -52,13 +85,8 @@ pub fn verify_password(password: &str, stored_hash: &str) -> Result<bool> {
 }
 
 // Session Management //
-const SESSION_TOKEN_BYTES: usize = 32;
-pub struct SessionToken {
-    pub secret: String, // Goes to client (never stored on server)
-    pub hash: [u8; 32] // Goes in sessions.token_hash (never leaves server)
-}
 
-/// Generates a session token and its stored hash
+/// Generates a session token and its stored hash.
 pub fn generate_session_token() -> SessionToken {
     let mut bytes = [0u8; SESSION_TOKEN_BYTES];
     OsRng.fill_bytes(&mut bytes);
@@ -69,6 +97,11 @@ pub fn generate_session_token() -> SessionToken {
     }
 }
 
+/// Hashes a session token the client presented, matching the stored form.
+///
+/// # Arguments
+///
+/// * `secret` - Session token as the client sent it.
 pub fn hash_session_token(secret: &str) -> Option<[u8; 32]> {
     let bytes = hex::decode(secret).ok()?;
     if bytes.len() != SESSION_TOKEN_BYTES {
@@ -78,14 +111,19 @@ pub fn hash_session_token(secret: &str) -> Option<[u8; 32]> {
 }
 
 // Security Management //
+
 static DECOY_HASH: LazyLock<String> = LazyLock::new(|| {
-    hash_password("decoy password, never matches a realy login (hopefully)")
+    hash_password("decoy password, never matches a real login (hopefully)")
     .expect("hashing a fixed string cannot fail")
 });
 
-/// Used to burn CPU time so that an attacker who wants to detect MS differences
-/// between username searches, password hash lookups, etc will get the same MS
-/// response time for all
+/// Burns the CPU time a password verification costs, against a fixed hash.
+///
+/// An unknown username runs this, so it takes the same time as a wrong password.
+///
+/// # Arguments
+///
+/// * `password` - Password to verify against the decoy hash.
 pub fn burn_verify(password: &str) {
     let _ = verify_password(password, &DECOY_HASH);
 }

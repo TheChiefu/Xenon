@@ -1,11 +1,15 @@
-use std::fmt;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::de::Error;
+//! A byte count that reads and writes as a unit string, such as `25MB`.
 
+use std::fmt;
+
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// A count of bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteSize(i64); // DB is an i64, matching type here
 
-// Units for Convenince
+// Units for convenience
 pub const BYTE:     i64 = 1;
 pub const KILOBYTE: i64 = 1000;
 pub const KIBIBYTE: i64 = 1024;
@@ -16,9 +20,9 @@ pub const GIBIBYTE: i64 = MEBIBYTE * 1024;
 pub const TERABYTE: i64 = GIGABYTE * 1000;
 pub const TEBIBYTE: i64 = GIBIBYTE * 1024;
 pub const PETABYTE: i64 = TERABYTE * 1000;
-pub const PEPIBYTE: i64 = TEBIBYTE * 1024;
+pub const PEBIBYTE: i64 = TEBIBYTE * 1024;
 pub const EXABYTE:  i64 = PETABYTE * 1000;
-pub const EXBIBYTE: i64 = PEPIBYTE * 1024;
+pub const EXBIBYTE: i64 = PEBIBYTE * 1024;
 
 /// Conversion for units (Uppercase matcher, unit affix, bytes)
 ///
@@ -27,7 +31,7 @@ pub const EXBIBYTE: i64 = PEPIBYTE * 1024;
 const UNITS: [(&str, &str, i64); 13] = [
     ("EIB", "EiB", EXBIBYTE),
     ("EB",  "EB",  EXABYTE),
-    ("PIB", "PiB", PEPIBYTE),
+    ("PIB", "PiB", PEBIBYTE),
     ("PB",  "PB",  PETABYTE),
     ("TIB", "TiB", TEBIBYTE),
     ("TB",  "TB",  TERABYTE),
@@ -42,14 +46,17 @@ const UNITS: [(&str, &str, i64); 13] = [
 
 impl ByteSize {
 
+    /// Wraps a raw count of bytes.
     pub const fn from_int(input: i64) -> Self {
         ByteSize(input)
     }
 
+    /// Unwraps the count of bytes.
     pub const fn to_int(self) -> i64 {
         self.0
     }
 
+    /// Parses a value and unit string, such as `25MB`, into a count of bytes.
     pub fn parse(input: &str) -> Result<Self, String> {
 
         // Trim input string to match format (###UNIT) where # is a digit and UNIT is an affix like "MB"
@@ -107,7 +114,7 @@ impl ByteSize {
 
 impl fmt::Display for ByteSize {
 
-    fn fmt (&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 
         // Convert i64 into a readable string (default to Bytes)
         for (_, unit, bytes) in UNITS {

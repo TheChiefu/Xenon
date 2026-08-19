@@ -1,40 +1,45 @@
+//! The WebSocket endpoint that pushes server events to connected clients.
+
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
-use tokio::sync::broadcast;
 use futures_util::{SinkExt, StreamExt};
+use serde::Serialize;
+use tokio::sync::broadcast;
 use uuid::Uuid;
-use serde::{Serialize};
-use tracing;
 
 use crate::config;
 use crate::db;
 use crate::routes::messages::MessageResponse;
-use crate::routes::{AuthUser, AppState};
+use crate::routes::{AppState, AuthUser};
 
 // Data Structs //
 
+/// An event the server pushes to a client.
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
-    Message { room_id: Uuid, message: MessageResponse},
-    MessageDeleted {room_id: Uuid, message_id: Uuid},
-    MessageEdited {room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64},
-    Invited {room_id: Uuid, invited_by: Uuid},
-    Banned {room_id: Uuid},
+    Message { room_id: Uuid, message: MessageResponse },
+    MessageDeleted { room_id: Uuid, message_id: Uuid },
+    MessageEdited { room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64 },
+    Invited { room_id: Uuid, invited_by: Uuid },
+    Banned { room_id: Uuid },
 }
 
 // Socketing Methods //
 
 /// Upgrades an HTTP request into a WebSocket.
 ///
-/// The request arrives as a GET carrying upgrade headers, so AuthUser runs on
+/// The request arrives as a GET carrying upgrade headers, so `AuthUser` runs on
 /// it like any other route and the connection is authenticated for its whole
-/// lifetime. Returns once the upgrade is agreed, leaving handle_socket running
-/// in its own task.
-/// - AuthUser: Who the socket belongs to
-/// - state: Pool and socket registry
-/// - ws: The upgrade handshake
+/// lifetime. Returns once the upgrade is agreed, leaving the socket running in
+/// its own task.
+///
+/// # Arguments
+///
+/// * `user_id` - Who the socket belongs to.
+/// * `state` - Pool and socket registry.
+/// * `ws` - The upgrade handshake.
 pub async fn ws_handler(
     AuthUser(user_id): AuthUser,
     State(state): State<AppState>,
@@ -46,71 +51,22 @@ pub async fn ws_handler(
         .on_upgrade(move |socket| handle_socket(socket, user_id, state))
 }
 
-/// Pushes server notifications to one connected client until they disconnect.
-///
-/// Everything the client sends is discarded. Joining rooms and posting messages
-/// happen over the HTTP endpoints, and this socket carries only what the server
-/// has to tell the client.
-async fn handle_socket(
-    socket: WebSocket,
-    user_id: Uuid,
-    state: AppState
-) {
-
-    // Each connected user has one broadcast channel in the registry.
-    // Take a receiver on theirs, creating a channel on their first connection.
-    let mut rx = {
-        let mut reg = match state.registry.write() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                tracing::warn!("registry lock was poisoned, recovering");
-                poisoned.into_inner()
-            }
-        };
-        
-        let tx = reg
-            .entry(user_id)
-            .or_insert_with(|| broadcast::channel(config::get().socket.message_buffer).0);
-        tx.subscribe()
-    }; // Write lock released here, before the long-lived loop below
-
-    // Split socket to handle read/write separately
-    let (mut sender, mut receiver) = socket.split();
-
-    // Take messages off of broadcast channel and write them to the socket
-    let mut send_task = tokio::spawn(async move {
-        while let Ok(text) = rx.recv().await {
-            if sender.send(Message::Text(text.into())).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // Void what client sends / discard it (socket only sends data not retrieves)
-    let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(_)) = receiver.next().await {}
-    });
-
-    // Either half finishing means the connection is done (close it)
-    tokio::select! {
-        _ = &mut send_task => recv_task.abort(),
-        _ = &mut recv_task => send_task.abort(),
-    }
-
-}
-
 /// Sends an event to every member of a room with an open socket.
-/// Failures are logged rather than returend, so a broadcast doesn't fail on a request.
-/// - state: Pool and socket registry
-/// - room_id: Room whose members recevive the event
-/// - event: What to broadcast
+///
+/// Errors are logged, not returned.
+///
+/// # Arguments
+///
+/// * `state` - Pool and socket registry.
+/// * `room_id` - Room whose members receive the event.
+/// * `event` - What to broadcast.
 pub async fn broadcast(
     state: &AppState,
     room_id: Uuid,
-    event: ServerEvent
+    event: ServerEvent,
 ) {
 
-    // Seralize event for broadcast
+    // Serialize event for broadcast
     match serde_json::to_string(&event) {
         Ok(payload) => {
 
@@ -147,17 +103,26 @@ pub async fn broadcast(
                     let _ = tx.send(payload.clone());
                 }
             }
-        },
+        }
 
         // Could not serialize
         Err(e) => tracing::error!("failed to serialize server event: {e}"),
-    };
+    }
 }
 
+/// Sends an event to one user's open sockets.
+///
+/// Errors are logged, not returned.
+///
+/// # Arguments
+///
+/// * `state` - Pool and socket registry.
+/// * `user_id` - User who receives the event.
+/// * `event` - What to send.
 pub async fn notify_user(
     state: &AppState,
     user_id: Uuid,
-    event: ServerEvent
+    event: ServerEvent,
 ) {
 
     // Serialize event
@@ -174,9 +139,69 @@ pub async fn notify_user(
             if let Some(tx) = reg.get(&user_id) {
                 let _ = tx.send(payload);
             }
-        },
+        }
 
+        // Could not serialize
         Err(e) => tracing::error!("failed to serialize server event: {e}"),
     }
+}
 
+// Helper Methods //
+
+/// Pushes server notifications to one connected client until they disconnect.
+///
+/// Everything the client sends is discarded. Joining rooms and posting messages
+/// happen over the HTTP endpoints, and this socket carries only what the server
+/// has to tell the client.
+///
+/// # Arguments
+///
+/// * `socket` - The upgraded connection.
+/// * `user_id` - Who the socket belongs to.
+/// * `state` - Pool and socket registry.
+async fn handle_socket(
+    socket: WebSocket,
+    user_id: Uuid,
+    state: AppState,
+) {
+
+    // Each connected user has one broadcast channel in the registry.
+    // Take a receiver on theirs, creating a channel on their first connection.
+    let mut rx = {
+        let mut reg = match state.registry.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("registry lock was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+
+        let tx = reg
+            .entry(user_id)
+            .or_insert_with(|| broadcast::channel(config::get().socket.message_buffer).0);
+        tx.subscribe()
+    }; // Write lock released here, before the long-lived loop below
+
+    // Split socket to handle read/write separately
+    let (mut sender, mut receiver) = socket.split();
+
+    // Take messages off of broadcast channel and write them to the socket
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(text) = rx.recv().await {
+            if sender.send(Message::Text(text.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Void what client sends / discard it (socket only sends data not retrieves)
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(_)) = receiver.next().await {}
+    });
+
+    // Either half finishing means the connection is done (close it)
+    tokio::select! {
+        _ = &mut send_task => recv_task.abort(),
+        _ = &mut recv_task => send_task.abort(),
+    }
 }

@@ -1,14 +1,18 @@
+//! The config file, read once at startup and readable from anywhere after.
+
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::bytesize::{ByteSize, MEBIBYTE};
 
-
 /// Static Global (configured once on load from file)
 static CONFIG: OnceLock<Config> = OnceLock::new();
+
+/// Config file layout this server reads.
 const CONFIG_VERSION: u8 = 1;
 
+/// Every setting the server reads at startup.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -37,7 +41,13 @@ impl Default for Config {
     }
 }
 
-/// Given a path to a config toml file, attempt to read and set global static config
+/// Reads the config file into the global static, writing defaults if it is absent.
+///
+/// Exits the process if the file cannot be parsed or fails validation.
+///
+/// # Arguments
+///
+/// * `path` - Path to the config toml file.
 pub fn init(path: &str) {
 
     let config: Config = match std::fs::read_to_string(path) {
@@ -61,7 +71,11 @@ pub fn init(path: &str) {
     CONFIG.set(config).expect("config already initialized");
 }
 
-/// Writes the defaults to disk when file does not exist
+/// Writes the defaults to disk and returns them.
+///
+/// # Arguments
+///
+/// * `path` - Path the config toml file is written to.
 fn write_default(path: &str) -> Config {
     let config = Config::default();
 
@@ -160,6 +174,12 @@ impl Config {
 }
 
 /// Verify that the field's given value is within the expected range
+///
+/// # Arguments
+///
+/// * `name` - Limit being checked, used in the returned message.
+/// * `min` - Lowest value the limit allows.
+/// * `max` - Highest value the limit allows.
 fn range(name: &str, min: usize, max: usize) -> Result<(), String> {
     if min < 1 {
         return Err(format!("limits.{name}_min must be at least 1"));
@@ -173,6 +193,10 @@ fn range(name: &str, min: usize, max: usize) -> Result<(), String> {
 }
 
 /// Public accessor for static global config
+///
+/// # Panics
+///
+/// Panics if called before `init`.
 pub fn get() -> &'static Config {
     CONFIG.get().expect("config not initialized")
 }
@@ -198,10 +222,10 @@ impl Default for Bind {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Storage {
-    // SQLite database file
+    /// SQLite database file
     pub db_path: String,
 
-    // Directory holding uploaded files, sharded by hash
+    /// Directory holding uploaded files, sharded by hash
     pub files_path: String
 }
 
@@ -217,12 +241,12 @@ impl Default for Storage {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Session {
-    // How long a session survives without activity
+    /// How long a session survives without activity
     pub lifetime_days: i64,
 
-    // Days that must elapse before an active session is extended again.
-    // Activity always extends expiry to lifetime_days from now, and this
-    // limits how often that write happens
+    /// Days that must elapse before an active session is extended again.
+    /// Activity always extends expiry to `lifetime_days` from now, and this
+    /// limits how often that write happens
     pub renew_after_days_elapsed: i64
 }
 

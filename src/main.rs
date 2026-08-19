@@ -10,10 +10,10 @@ mod validate;
 
 use std::path::Path;
 use std::time::Duration;
+
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 use uuid::Uuid;
-use tracing;
 
 use crate::error::{AppError, Result};
 use crate::models::GlobalRole;
@@ -83,7 +83,16 @@ async fn main() -> Result<()> {
 
 }
 
-/// Generates a default owner for the server for inital setup
+/// Creates the bootstrap owner account, printing its generated password once.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+///
+/// # Errors
+///
+/// Returns `AppError::Hash` if the password cannot be hashed, and
+/// `AppError::Db` if the insert fails for any reason but an owner existing.
 async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
     let password = utils::generate_invite_code();
     let hash = utils::hash_password(&password)?;
@@ -94,7 +103,7 @@ async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
     // Attempt to create owner account
     let mut conn = pool.acquire().await?;
     let result = db::insert_user(
-        &mut *conn,
+        &mut conn,
         id,
         username,
         display_name,
@@ -117,6 +126,9 @@ async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
     }
 }
 
+/// Creates the file storage directories and verifies the temp one is writable.
+///
+/// Exits the process if any step fails.
 fn ensure_files() {
 
     // Create or check if files folder path exists
@@ -152,7 +164,7 @@ fn ensure_files() {
 
 // Shutdown //
 
-/// Handle "SIGTERM" for unix platforms
+/// Resolves on SIGTERM.
 #[cfg(unix)]
 async fn terminate() {
     use tokio::signal::unix::{signal, SignalKind};
@@ -168,8 +180,9 @@ async fn terminate() {
     std::future::pending::<()>().await;
 }
 
-/// Resolves on the first shutdown signal
-/// Axum polls this alongside serving
+/// Resolves on the first shutdown signal.
+///
+/// Axum polls this alongside serving.
 async fn shutdown_signal() {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {},

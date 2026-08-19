@@ -1,23 +1,26 @@
-use axum::Json;
+//! HTTP handlers for file upload and download.
+
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
+use futures_util::TryStreamExt;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tokio_util::io::{ReaderStream, StreamReader};
-use futures_util::TryStreamExt;
 use uuid::Uuid;
 
 use crate::api::files::Stored;
-use crate::{api, config, db, validate};
+use crate::bytesize;
 use crate::error::{AppError, Result};
 use crate::models::{File, GlobalRole};
-use crate::routes::{AuthUser};
-use crate::bytesize;
+use crate::routes::AuthUser;
+use crate::{api, config, db, validate};
 
 // Data Structs //
 
+/// A stored file, as sent to clients.
 #[derive(Clone, Serialize)]
 pub struct FileResponse {
     pub id: Uuid,
@@ -27,33 +30,36 @@ pub struct FileResponse {
 }
 
 impl From<File> for FileResponse {
-    fn from(f: File) -> Self {
+    fn from(file: File) -> Self {
         Self {
-            id: f.id,
-            filename: f.filename,
-            mime: f.mime,
-            byte_size: f.byte_size,
-        } 
+            id: file.id,
+            filename: file.filename,
+            mime: file.mime,
+            byte_size: file.byte_size,
+        }
     }
 }
 
 // Routing Methods //
 
-/// Store an uploaded file
-/// - AuthUser: Who is uploading
-/// - pool: Pool of SQL Connections
-/// - multipart: Request body carrying the file
+/// Stores an uploaded file.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is uploading.
+/// * `pool` - Pool of SQL connections.
+/// * `multipart` - Request body carrying the file.
 pub async fn upload(
-    AuthUser(user_id): AuthUser,
+    AuthUser(caller_id): AuthUser,
     State(pool): State<SqlitePool>,
-    mut multipart: Multipart
+    mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<FileResponse>)> {
 
     let mut tx = pool.begin().await?;
 
     // Reject unallowed roles to upload
     let allowed = [GlobalRole::Owner, GlobalRole::Admin, GlobalRole::Member];
-    db::require_role(&mut *tx, user_id, &allowed).await?;
+    db::require_role(&mut tx, caller_id, &allowed).await?;
     tx.commit().await?;
 
     // Read POST body
@@ -61,8 +67,8 @@ pub async fn upload(
         Ok(Some(field)) => field,
         Ok(None) => {
             let err = "the file upload request had no multipart fields";
-            return Err(AppError::Validation(err.to_string()))
-        },
+            return Err(AppError::Validation(err.to_string()));
+        }
         Err(e) => return Err(AppError::Io(std::io::Error::other(e)))
     };
 
@@ -72,7 +78,7 @@ pub async fn upload(
 
     // Setup reader
     let file_name = validate::file_name(file_path)?;
-    let reader  = StreamReader::new(field.map_err(std::io::Error::other));
+    let reader = StreamReader::new(field.map_err(std::io::Error::other));
 
     // Get result and return outcome
     let result = api::files::store(&pool, &file_name, reader).await?;
@@ -82,13 +88,16 @@ pub async fn upload(
     }
 }
 
-/// Stream a stored file
-/// - pool: Pool of SQL Connections
-/// - file_id: File to send
+/// Streams a stored file.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `file_id` - File to send.
 pub async fn download(
     AuthUser(_): AuthUser,
     State(pool): State<SqlitePool>,
-    Path(file_id): Path<Uuid>
+    Path(file_id): Path<Uuid>,
 ) -> Result<Response> {
 
     // Destructure the result
@@ -108,7 +117,9 @@ pub async fn download(
     Ok((StatusCode::OK, headers, body).into_response())
 }
 
-/// Largest upload body accepted, above file_bytes_max so read_stream rejects first
+/// Returns the largest upload body accepted.
+///
+/// Sits above `file_bytes_max` so the streaming read rejects the file first.
 pub fn max_body_bytes() -> usize {
     let headroom_bytes = bytesize::MEBIBYTE;
     let max_file_bytes = config::get().limits.file_bytes_max.to_int();

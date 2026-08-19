@@ -1,26 +1,41 @@
+//! The `rooms` table, and the tables scoped to a single room.
+
 pub mod bans;
-pub mod members;
 pub mod invites;
+pub mod members;
 
 use uuid::Uuid;
 
+use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::{GlobalRole, Permission, Permissions, Room, Visibility};
-use crate::{db, utils, validate};
+use crate::utils;
+use crate::validate;
 
+// API Methods //
 
-/// Request to create a room:
-/// - pool: SQL Pool
-/// - creator_id: ID of user attempting to create a room
-/// - room_name: Optional name of room (empty rooms are automatically handled by clients)
-/// - creator_permissions: Permission creator gives themselves on room creation
-/// - default_permissions: Permission given to users when they join the channel
-/// - visibility: Determines room public/private visibility
+/// Creates a room and grants its creator access, returning the new room id.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `caller_id` - User creating the room.
+/// * `name` - Room name, or `None` for a room clients render as unnamed.
+/// * `caller_permissions` - Mask the creator takes, or `None` to inherit the
+///   room defaults.
+/// * `default_permissions` - Mask a user takes on joining the room.
+/// * `visibility` - Whether the room is discoverable and self-service.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if a Public room's creator could not delete
+/// it or the name is over the length limit, and `AppError::Forbidden` if the
+/// caller's global role cannot create rooms.
 pub async fn create(
     pool: &sqlx::SqlitePool,
-    creator_id: Uuid,
+    caller_id: Uuid,
     name: Option<&str>,
-    creator_permissions: Option<Permissions>,
+    caller_permissions: Option<Permissions>,
     default_permissions: Permissions,
     visibility: Visibility,
 ) -> Result<Uuid> {
@@ -28,7 +43,7 @@ pub async fn create(
     // Public rooms need someone who can delete them, they never empty out on their own
     let requires_delete_room = [Visibility::Public];
     if requires_delete_room.contains(&visibility)
-        && !creator_permissions.unwrap_or(default_permissions).has(Permission::DeleteRoom)
+        && !caller_permissions.unwrap_or(default_permissions).has(Permission::DeleteRoom)
     {
         return Err(AppError::Validation(
             "a public room's creator must be able to delete it".to_string(),
@@ -43,7 +58,7 @@ pub async fn create(
 
     // Check if user can create a room
     let allowed = [GlobalRole::Owner, GlobalRole::Admin, GlobalRole::Member];
-    db::require_role(&mut *tx, creator_id, &allowed).await?;
+    db::require_role(&mut tx, caller_id, &allowed).await?;
 
     // Create room
     let now = utils::now_ms();
@@ -71,8 +86,8 @@ pub async fn create(
         "
     )
     .bind(room_id)
-    .bind(creator_id)
-    .bind(creator_permissions)
+    .bind(caller_id)
+    .bind(caller_permissions)
     .bind(now)
     .execute(&mut *tx)
     .await?;
@@ -84,14 +99,22 @@ pub async fn create(
     Ok(room_id)
 }
 
-/// Grant a user access to a room
-/// - pool: Pool of SQL Connections
-/// - user_id: User joining
-/// - room_id: Room being joined
+/// Grants a user access to a room, spending any invite they hold on it.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room being joined.
+/// * `user_id` - User joining.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the room does not exist, the room needs an
+/// invite the user does not hold, or the user is banned from it.
 pub async fn join(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
     room_id: Uuid,
+    user_id: Uuid,
 ) -> Result<()> {
 
     // Open transaction
@@ -119,11 +142,11 @@ pub async fn join(
         None => return Err(AppError::Forbidden)
     };
 
-    if requires_invite && !invites::has_unexpired_invite(&mut tx, room_id, user_id, now).await? {
+    if requires_invite && !invites::exists(&mut tx, room_id, user_id, now).await? {
         return Err(AppError::Forbidden);
     }
 
-    if bans::is_banned(&mut tx, room_id, user_id, now).await? {
+    if bans::exists(&mut tx, room_id, user_id, now).await? {
         return Err(AppError::Forbidden);
     }
 
@@ -142,8 +165,8 @@ pub async fn join(
     .execute(&mut *tx)
     .await?;
 
-    // Use user invite (remove user from room invite table)
-    invites::delete(&mut tx, user_id, room_id).await?;
+    // Spend the invite the join was allowed on
+    invites::delete(&mut tx, room_id, user_id).await?;
 
     // If no errors, commit transaction
     tx.commit().await?;
@@ -151,29 +174,39 @@ pub async fn join(
     Ok(())
 }
 
-/// Remove given user from a room
-/// - pool: Pool of SQL Connections
-/// - user_id: User to remove from room
-/// - room_id: Room to remove user from
+/// Removes a user from a room at their own request.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to leave.
+/// * `user_id` - User leaving.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if the user is not in the room.
 pub async fn leave(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
     room_id: Uuid,
+    user_id: Uuid,
 ) -> Result<()> {
 
     let mut tx = pool.begin().await?;
-    members::remove(&mut *tx, user_id, room_id).await?;
+    members::remove(&mut tx, room_id, user_id).await?;
     tx.commit().await?;
 
     Ok(())
 }
 
-/// Get list of rooms available to user
-/// - pool: Pool of SQL Connections
-/// - user_id: ID of user to filter on
-pub async fn list_my_rooms(
+/// Lists the rooms a user is a member of.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `user_id` - User to filter on.
+pub async fn list_mine(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid
+    user_id: Uuid,
 ) -> Result<Vec<Room>> {
 
     let mut conn = pool.acquire().await?;
@@ -191,13 +224,15 @@ pub async fn list_my_rooms(
     .await?;
 
     Ok(rooms)
-
 }
 
-/// One page of the discoverable rooms (Public and Locked)
-/// - pool: Pool of SQL Connections
-/// - after: Room id to page from ('None' shows first 'limit' amount of results)
-/// - limit: How many rooms to return
+/// Lists one page of the discoverable rooms, meaning Public and Locked.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `after` - Room id to page from, or `None` for the first page.
+/// * `limit` - How many rooms to return.
 pub async fn list_discoverable(
     pool: &sqlx::SqlitePool,
     after: Option<Uuid>,

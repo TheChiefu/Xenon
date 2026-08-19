@@ -1,35 +1,58 @@
-use crate::db::effective_permissions;
+//! The `room_access` table: who belongs to a room, and what they may do in it.
 
+use serde::Serialize;
 use uuid::Uuid;
 
+use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{Permission, Permissions, RoomMember, Visibility};
+use crate::models::{Permission, Permissions, Visibility};
 
-/// Get list of members pertaining to a room
-/// - pool: Pool of SQL Connections
-/// - user_id: Who is making the request
-/// - room_id: Room to look in
+// Data Structs //
+
+/// One member of a room, with their resolved permission mask.
+#[derive(sqlx::FromRow, Serialize)]
+pub struct Entry {
+    pub user_id: Uuid,
+    pub permissions: Permissions,
+    pub granted_at: i64
+}
+
+// API Methods //
+
+/// Lists the members of a room, oldest membership first.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to look in.
+/// * `caller_id` - Who is requesting the list.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller is not a member of the room.
 pub async fn list(
     pool: &sqlx::SqlitePool,
-    user_id: Uuid,
-    room_id: Uuid
-) -> Result<Vec<RoomMember>> {
+    room_id: Uuid,
+    caller_id: Uuid,
+) -> Result<Vec<Entry>> {
 
     let mut conn = pool.acquire().await?;
 
-    // Check if the user a member of the room
+    // Check if the caller is a member of the room
     let is_member: bool = sqlx::query_scalar(
-    "SELECT EXISTS(SELECT 1 FROM room_access WHERE room_id = ?1 AND user_id = ?2)"
+        "SELECT EXISTS(SELECT 1 FROM room_access WHERE room_id = ?1 AND user_id = ?2)"
     )
     .bind(room_id)
-    .bind(user_id)
+    .bind(caller_id)
     .fetch_one(&mut *conn)
     .await?;
 
-    if !is_member { return Err(AppError::Forbidden) }
+    if !is_member {
+        return Err(AppError::Forbidden);
+    }
 
     // Get resulting vector of room members
-    let result: Vec<RoomMember> = sqlx::query_as(
+    let result: Vec<Entry> = sqlx::query_as(
         "
         SELECT a.user_id, COALESCE(a.permissions, r.default_permissions) AS permissions, a.granted_at
         FROM room_access a JOIN rooms r ON r.id = a.room_id
@@ -42,43 +65,47 @@ pub async fn list(
     .await?;
 
     Ok(result)
-
 }
 
-/// Set's a target user's permissions in a room from caller
-/// - pool: Pool of SQL Connections
-/// - room_id: Room in which permissions pertain to
-/// - caller_id: Who is making the request
-/// - target_id: Who's permissions are being effected
-/// - permissions: New mask of permissions
+/// Replaces a member's permission mask in a room.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the permissions apply to.
+/// * `caller_id` - Who is making the change.
+/// * `target_id` - Whose permissions are being set.
+/// * `permissions` - New mask to store.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller lacks `Permission::Manage`,
+/// `AppError::Validation` if the caller grants themselves a permission they do
+/// not hold, and `AppError::NotFound` if the target is not in the room.
 pub async fn set_permissions(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
     caller_id: Uuid,
     target_id: Uuid,
-    permissions: Permissions
+    permissions: Permissions,
 ) -> Result<()> {
 
     let mut conn = pool.acquire().await?;
 
-    // Check user's permission in the room
-    let perms = effective_permissions(&mut *conn, caller_id, room_id).await?;
+    // Check caller's permission in the room
+    let perms = db::effective_permissions(&mut conn, room_id, caller_id).await?;
     let Some(perms) = perms else {
         return Err(AppError::Forbidden);
     };
 
-    // If user does not have permission to manage permission, deny
     if !perms.has(Permission::Manage) {
-        return Err(AppError::Forbidden)
+        return Err(AppError::Forbidden);
     }
 
-    // If user is themselves and trying to give themselves permissions
-    // that they don't already have, deny
-    if caller_id == target_id {
-        if !perms.contains(permissions) {
-            let err = "cannot grant yourself permissions you do not hold".to_string();
-            return Err(AppError::Validation(err))
-        }
+    // A caller editing their own row cannot add a permission they do not hold
+    if caller_id == target_id && !perms.contains(permissions) {
+        let err = "cannot grant yourself permissions you do not hold".to_string();
+        return Err(AppError::Validation(err));
     }
 
     // Change target's permissions to new mask
@@ -87,33 +114,41 @@ pub async fn set_permissions(
         UPDATE room_access
         SET permissions = ?1
         WHERE room_id = ?2 AND user_id = ?3
-    ")
+        "
+    )
     .bind(permissions)
     .bind(room_id)
     .bind(target_id)
     .execute(&mut *conn)
     .await?;
 
-    // No users affected mean targeted user isn't in room
-    if affected.rows_affected() <= 0 {
-        return Err(AppError::NotFound)
+    // No row affected means the target is not in the room
+    if affected.rows_affected() == 0 {
+        return Err(AppError::NotFound);
     }
 
     Ok(())
 }
 
-/// Remove one member from one room, culling or promoting as needed.
+/// Removes one member from one room, culling or promoting as needed.
 ///
 /// The single lifecycle path: voluntary leave, removal, and account deletion
 /// all land here. Takes a connection rather than a pool so the caller owns the
 /// transaction, since account deletion removes a user from every room at once.
-/// - conn: Connection to SQL DB
-/// - user_id: User being removed
-/// - room_id: Room to remove them from
-pub async fn remove (
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room to remove them from.
+/// * `user_id` - User being removed.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if the user is not in the room.
+pub async fn remove(
     conn: &mut sqlx::SqliteConnection,
-    user_id: Uuid,
     room_id: Uuid,
+    user_id: Uuid,
 ) -> Result<()> {
 
     // Attempt to remove user from room access
@@ -127,17 +162,17 @@ pub async fn remove (
 
     // No membership to remove (404)
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound)
+        return Err(AppError::NotFound);
     }
 
-    // There were a member, remove from the read state
+    // They were a member, so remove their read state as well
     sqlx::query("DELETE FROM read_state WHERE room_id = ?1 AND user_id = ?2")
     .bind(room_id)
     .bind(user_id)
     .execute(&mut *conn)
     .await?;
 
-    // Check if any members still exit in room
+    // Check if any members still exist in the room
     let has_members: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM room_access WHERE room_id = ?1)"
     )
@@ -200,8 +235,11 @@ pub async fn remove (
 
 // Helper Methods //
 
-/// Who inherits a Public room that just lost its last DeleteRoom holder.
-/// `members` is ordered oldest first; None means nobody needs promoting.
+/// Picks who inherits a Public room that just lost its last `DeleteRoom` holder.
+///
+/// # Arguments
+///
+/// * `members` - Remaining members, ordered oldest membership first.
 fn pick_promotion(members: &[(Uuid, Permissions)]) -> Option<Uuid> {
 
     // Someone can still delete the room, leave it alone
@@ -212,8 +250,5 @@ fn pick_promotion(members: &[(Uuid, Permissions)]) -> Option<Uuid> {
     }
 
     // Nobody can, the longest-standing member inherits it
-    match members.first() {
-        Some((user_id, _)) => Some(*user_id),
-        None => None
-    }
+    members.first().map(|(user_id, _)| *user_id)
 }

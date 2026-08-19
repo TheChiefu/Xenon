@@ -1,19 +1,34 @@
-use uuid::Uuid;
-use tracing;
+//! Queries shared by more than one API module.
+//!
+//! Everything here takes a connection rather than a pool, so a caller can run
+//! several of these inside one transaction.
 
+use uuid::Uuid;
+
+use crate::config;
 use crate::error::{self, AppError, Result};
 use crate::models::{GlobalRole, Permissions};
 use crate::utils;
-use crate::config;
 
-pub const DAY: i64 = 86400000; // Milliseconds
+/// One day in milliseconds.
+pub const DAY: i64 = 86400000;
 
+/// Resolves a session token to the user it belongs to, extending the session.
+///
+/// A session past its renewal threshold has its expiry pushed out, so an active
+/// client never has to log in again. A malformed, revoked, or expired token
+/// returns `Ok(None)`.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `secret` - Session token presented by the client.
 pub async fn authenticate(
     conn: &mut sqlx::SqliteConnection,
     secret: &str,
 ) -> Result<Option<Uuid>> {
 
-    // No session token, quit exit
+    // Not a token this server could have issued
     let Some(hash) = utils::hash_session_token(secret) else {
         return Ok(None);
     };
@@ -21,7 +36,7 @@ pub async fn authenticate(
     // Fetch user id and session expiry information
     let now: i64 = utils::now_ms();
     let row = sqlx::query_as::<_, (Uuid, i64)>(
-    "
+        "
         SELECT user_id, expires_at FROM sessions
         WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2
         "
@@ -55,6 +70,21 @@ pub async fn authenticate(
     Ok(Some(user_id))
 }
 
+/// Writes a new row to the users table.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `id` - Id the new user is stored under.
+/// * `username` - Login name being claimed.
+/// * `display_name` - Name shown to other users.
+/// * `password_hash` - PHC string produced by `utils::hash_password`.
+/// * `global_role` - Server-wide role the user starts with.
+///
+/// # Errors
+///
+/// Returns `AppError::UsernameTaken` if the username exists, and
+/// `AppError::OwnerExists` if an owner is already bootstrapped.
 pub async fn insert_user(
     conn: &mut sqlx::SqliteConnection,
     id: Uuid,
@@ -62,8 +92,8 @@ pub async fn insert_user(
     display_name: &str,
     password_hash: &str,
     global_role: GlobalRole,
-) -> Result<()>
-{
+) -> Result<()> {
+
     sqlx::query(
         "
         INSERT INTO users (id, username, display_name, password_hash, global_role, created_at)
@@ -83,6 +113,14 @@ pub async fn insert_user(
     Ok(())
 }
 
+/// Opens a session for a user, returning the secret the client keeps.
+///
+/// Only the hash of the token reaches the database.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - User the session belongs to.
 pub async fn create_session(
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid,
@@ -104,9 +142,16 @@ pub async fn create_session(
     .await?;
 
     Ok(token.secret)
-
 }
 
+/// Creates a registration code, returning the code itself.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `created_by` - User issuing the code.
+/// * `max_uses` - How many registrations the code covers, or `None` for unlimited.
+/// * `lifetime` - How long (in ms) the code lasts, or `None` for no expiry.
 pub async fn create_invite(
     conn: &mut sqlx::SqliteConnection,
     created_by: Uuid,
@@ -135,17 +180,21 @@ pub async fn create_invite(
     Ok(code)
 }
 
-
-/// Given a room and user id, get permission mask of that user within the room.
-/// Result type, if any failure occurs bubble it up, otherwise return an Ok
-/// type for the following cases:
-/// 
-/// - None: No permission to room (cannot access or interact with it)
-/// - Some: Mask of allowed permissions in a room
+/// Resolves what a user is allowed to do in a room.
+///
+/// `None` means the user has no room_access row, so they can neither read the
+/// room nor interact with it. `Some` is their mask, which falls back to the
+/// room's defaults when their own column is NULL.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room the permissions apply to.
+/// * `user_id` - User being resolved.
 pub async fn effective_permissions(
     conn: &mut sqlx::SqliteConnection,
+    room_id: Uuid,
     user_id: Uuid,
-    room_id: Uuid
 ) -> Result<Option<Permissions>> {
 
     let result: Option<Permissions> = sqlx::query_scalar(
@@ -163,13 +212,19 @@ pub async fn effective_permissions(
     Ok(result)
 }
 
-
-/// Check if a user has global admin permissions
-/// - conn: Connection to SQL DB
-/// - user_id: User in question to check
+/// Reads a user's server-wide role.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - User being read.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the user is missing or tombstoned.
 pub async fn global_role(
     conn: &mut sqlx::SqliteConnection,
-    user_id: Uuid
+    user_id: Uuid,
 ) -> Result<GlobalRole> {
 
     let result = sqlx::query_scalar(
@@ -184,19 +239,26 @@ pub async fn global_role(
         Err(sqlx::Error::RowNotFound) => {
             tracing::warn!("references missing or tombstoned user {user_id}");
             Err(AppError::Forbidden)
-        },
+        }
         Err(other) => Err(AppError::Db(other))
     }
 }
 
-/// Rejects a user whose global role is outside the allowed set
-/// - conn: Connection to SQL DB
-/// - user_id: Who is performing the action
-/// - allowed: Roles permitted to perform it
+/// Rejects a user whose global role is outside the allowed set.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - Who is performing the action.
+/// * `allowed` - Roles permitted to perform it.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the role is outside `allowed`.
 pub async fn require_role(
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid,
-    allowed: &[GlobalRole]
+    allowed: &[GlobalRole],
 ) -> Result<()> {
 
     let role = global_role(&mut *conn, user_id).await?;
@@ -207,14 +269,17 @@ pub async fn require_role(
     Ok(())
 }
 
-/// List members of a given room
-/// - conn: Connection to SQL DB
-/// - room_id: Room to look in
+/// Lists the ids of every member of a room.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room to look in.
 pub async fn room_member_ids(
     conn: &mut sqlx::SqliteConnection,
     room_id: Uuid,
-) -> Result<Vec<Uuid>>
-{
+) -> Result<Vec<Uuid>> {
+
     let members: Vec<Uuid> = sqlx::query_scalar(
         "
         SELECT user_id
@@ -229,8 +294,17 @@ pub async fn room_member_ids(
     Ok(members)
 }
 
-/// Write a user's global role
-/// Returns false when no user is matched
+/// Writes a user's global role, returning false when no user was matched.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - User receiving the role.
+/// * `role` - Role to store.
+///
+/// # Errors
+///
+/// Returns `AppError::OwnerExists` if the write would create a second owner.
 pub async fn set_global_role(
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid,
@@ -240,7 +314,7 @@ pub async fn set_global_role(
     let updated = sqlx::query(
         "
         UPDATE users SET global_role = ?1
-        WHERE id =?2 AND deleted_at IS NULL
+        WHERE id = ?2 AND deleted_at IS NULL
         "
     )
     .bind(role)

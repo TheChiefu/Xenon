@@ -1,15 +1,22 @@
+//! The `users` table.
+
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::{GlobalRole, UserSummary};
 
-/// One page of users
-/// - pool: Pool of SQL Connections
-/// - match_user: Username to match query on
-/// - after: User id to page from ('None' shows first 'limit' amount of results)
-/// - limit: How many users to return
-pub async fn get_users(
+// API Methods //
+
+/// Lists one page of users, optionally filtered by a username prefix.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `match_user` - Username prefix to match on, or `None` for every user.
+/// * `after` - User id to page from, or `None` for the first page.
+/// * `limit` - How many users to return.
+pub async fn list(
     pool: &sqlx::SqlitePool,
     match_user: Option<String>,
     after: Option<Uuid>,
@@ -45,16 +52,19 @@ pub async fn get_users(
     .await?;
 
     Ok(users)
-
 }
 
-/// Looks up a user's public profile by id.
+/// Reads a user's public profile by id.
 ///
-/// Not filtered by deleted_at: a soft-deleted user's past messages still need
-/// a name to display, so their profile stays resolvable after they're gone.
-/// - pool: Pool of SQL Connections
-/// - user_id: User to look up
-pub async fn get_user(
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `user_id` - User to look up.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if no such user exists.
+pub async fn get(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
 ) -> Result<UserSummary> {
@@ -75,19 +85,28 @@ pub async fn get_user(
     user.ok_or(AppError::NotFound)
 }
 
-/// Changes a user's global role
-/// - pool: Pool of SQL connections
-/// - actor_id:  User performing the role change
-/// - target_id: User receiving the role change
-/// - role: The global role target receives
+/// Changes a user's server-wide role.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `caller_id` - User performing the role change.
+/// * `target_id` - User receiving the role change.
+/// * `role` - Role the target receives.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the new role is Owner, if the caller is
+/// neither Owner nor Admin, if the target is the Owner, or if an Admin targets
+/// another Admin; and `AppError::NotFound` if the target does not exist.
 pub async fn set_role(
     pool: &sqlx::SqlitePool,
-    actor_id: Uuid,
+    caller_id: Uuid,
     target_id: Uuid,
     role: GlobalRole,
 ) -> Result<()> {
 
-    // Can't change owner's role
+    // Ownership is not transferable through this path
     if role == GlobalRole::Owner {
         return Err(AppError::Forbidden);
     }
@@ -95,31 +114,31 @@ pub async fn set_role(
     // Start transaction
     let mut tx = pool.begin().await?;
 
-    let actor_role = db::global_role(&mut *tx, actor_id).await?;
+    let caller_role = db::global_role(&mut tx, caller_id).await?;
 
-    // If actor a rank high enough to change other's roles
-    let permissiable_roles = [GlobalRole::Owner, GlobalRole::Admin];
-    if !permissiable_roles.contains(&actor_role) {
+    // Is the caller ranked high enough to change other's roles
+    let permissible_roles = [GlobalRole::Owner, GlobalRole::Admin];
+    if !permissible_roles.contains(&caller_role) {
         return Err(AppError::Forbidden);
     }
 
     // Can't change owner's role
-    let target_role = db::global_role(&mut *tx, target_id).await?;
+    let target_role = db::global_role(&mut tx, target_id).await?;
     if target_role == GlobalRole::Owner {
         return Err(AppError::Forbidden);
     }
 
     // Admins can't change each other's roles
-    if actor_role == GlobalRole::Admin && target_role == GlobalRole::Admin {
+    if caller_role == GlobalRole::Admin && target_role == GlobalRole::Admin {
         return Err(AppError::Forbidden);
     }
 
-    // Rank doesn't exist, exit
-    if !db::set_global_role(&mut *tx, target_id, role).await? {
+    // No row updated, so the target does not exist
+    if !db::set_global_role(&mut tx, target_id, role).await? {
         return Err(AppError::NotFound);
     }
 
     tx.commit().await?;
-    Ok(())
 
+    Ok(())
 }

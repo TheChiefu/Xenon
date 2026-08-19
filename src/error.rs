@@ -1,13 +1,16 @@
+//! The one error type every fallible path returns, and its HTTP mapping.
+
 use std::fmt;
-use axum::Json;
+
 use axum::extract::multipart::MultipartError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use uuid::Uuid;
-use tracing;
 
 use crate::bytesize::ByteSize;
 
+/// Everything a request can fail with.
 #[derive(Debug)]
 pub enum AppError {
     InvalidCredentials,
@@ -114,10 +117,14 @@ impl IntoResponse for AppError {
     }
 }
 
-/// Shorthand: `Result<Uuid>` instead of `Result<Uuid, AppError>`
+/// Shorthand: `Result<Uuid>` instead of `Result<Uuid, AppError>`.
 pub type Result<T> = std::result::Result<T, AppError>;
 
-
+/// Maps a unique-constraint failure to the error naming the column it hit.
+///
+/// # Arguments
+///
+/// * `e` - Error the query returned.
 pub fn unique_violation(e: sqlx::Error) -> AppError {
     let mapped = match &e {
         sqlx::Error::Database(db) if db.is_unique_violation() => {
@@ -140,7 +147,11 @@ pub fn unique_violation(e: sqlx::Error) -> AppError {
 }
 
 /// Recovers the status axum picked for a rejected body, such as 413 when the
-/// route's DefaultBodyLimit was exceeded
+/// route's `DefaultBodyLimit` was exceeded.
+///
+/// # Arguments
+///
+/// * `e` - I/O error the rejected body surfaced as.
 fn multipart_rejection(e: &std::io::Error) -> Option<(StatusCode, String)> {
     let source = e.get_ref()?;
     let multipart = source.downcast_ref::<MultipartError>()?;
