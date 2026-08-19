@@ -68,7 +68,7 @@ pub async fn create_room(
     let creator_permissions = body.claim_all.then_some(Permissions::ALL);
 
     // Attempt to create room
-    let id = api::rooms::create_room(
+    let id = api::rooms::create(
         &pool,
         user_id,
         body.name.as_deref(),
@@ -90,7 +90,7 @@ pub async fn join_room(
     Path(room_id): Path<Uuid>
 ) -> Result<StatusCode> {
 
-    api::rooms::join_room(&pool, user_id, room_id).await?;
+    api::rooms::join(&pool, user_id, room_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -104,7 +104,7 @@ pub async fn list_members (
     Path(room_id): Path<Uuid>
 ) -> Result<Json<Vec<RoomMember>>> {
 
-    let members = api::rooms::list_members(&pool, user_id, room_id).await?;
+    let members = api::rooms::members::list(&pool, user_id, room_id).await?;
     Ok(Json(members))
 }
 
@@ -122,7 +122,7 @@ pub async fn set_permissions (
 ) -> Result<StatusCode> {
 
     let perms = Permissions::from_list(&body);
-    api::rooms::set_permissions(&pool, room_id, caller_id, target_id, perms).await?;
+    api::rooms::members::set_permissions(&pool, room_id, caller_id, target_id, perms).await?;
     Ok(StatusCode::OK)
 
 }
@@ -137,7 +137,7 @@ pub async fn leave_room (
     Path(room_id): Path<Uuid>
 ) -> Result<StatusCode> {
 
-    api::rooms::leave_room(&pool, user_id, room_id).await?;
+    api::rooms::leave(&pool, user_id, room_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -165,7 +165,7 @@ pub async fn list_discoverable_rooms (
     let max = config::get().paging.room_page;
     let limit = query.limit.unwrap_or(max).clamp(1, max);
 
-    let rooms = api::rooms::list_discoverable_rooms(&pool, query.after, limit).await?;
+    let rooms = api::rooms::list_discoverable(&pool, query.after, limit).await?;
     Ok(Json(rooms))
 }
 

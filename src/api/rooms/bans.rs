@@ -128,7 +128,7 @@ pub async fn ban_user(
     // Kick user from room (if they are in it)
     // If they are not in room (404, but ignore that case)
     // Return other relevant errors
-    match rooms::remove_member(&mut tx, target_id, room_id).await {
+    match rooms::members::remove(&mut tx, target_id, room_id).await {
         Err(AppError::NotFound) => (),
         Err(err) => return Err(err),
         Ok(_)=> ()
