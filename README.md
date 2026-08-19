@@ -31,6 +31,15 @@ It covers:
 By default the `config.toml` file is expected to be at the same directory as the server.
 To use a different directory on boot, set an environment variable `XENON_CONFIG` with the desired location.
 
+## Building
+Requires Rust 1.85 or newer (this crate uses edition 2024). Distribution packages
+on other OS's (such as Ubuntu Server) are using older packages than that, so install via: [rustup](https://rustup.rs) rather than `apt install cargo`.
+
+SQLite is compiled from source, so a C toolchain is also needed:
+
+    sudo apt install build-essential
+    cargo build --release
+
 ## Plan
 - [x] Create Database model/schema (first pass)
 - [x] Get REST API functional
@@ -46,7 +55,6 @@ To use a different directory on boot, set an environment variable `XENON_CONFIG`
     - [x] Per-room permissions and global roles
 - [ ] Room settings (rename, delete)
 - [ ] Profile and account (edit profile, change password, delete account, transfer ownership)
-- [ ] Direct messages
 - [ ] Messages
     - [ ] Search
     - [ ] Read state
@@ -56,15 +64,20 @@ To use a different directory on boot, set an environment variable `XENON_CONFIG`
 - [ ] Create rudimentary GUI Application (Slint)
     - [ ] Linux/Windows Build
     - [ ] Android Build
+- [ ] Create PWA Web App (Typescript) for iOS
 
 ## Developer Comment(s):
 I am not a database, server, or security developer; so have no expectation of a professional grade chat
 application. Although I work in software development I primary work on the GUI side (Qt) and video game space.
 
-I wanted a project to learn Rust on an have a useful tool my friends and I can use. We are primarily using
-[Spacebar](https://github.com/spacebarchat) + [Fermo](https://git.sovrahi.com/oh64/Fermo), so if you are looking
+I wanted a project to learn Rust on and have a useful tool my friends can use. We were using
+[Spacebar](https://github.com/spacebarchat) + [Fermo](https://git.sovrahi.com/oh64/Fermo) previously, so if you are looking
 to move away from Discord like we did I'd suggest looking at those projects. This project is meant to be similar
-in concept to those (self-hostable private chat app), but less of a direct discord clone. 
+in concept to those (self-hostable private chat app), but less of a direct discord clone.
+
+My plan for this project is something very easy to setup, deploy, and maintain.
+Currently the only thing required to get it running is compiling the program and running the executable.
+The config files, file upload path, database file, and defaults are all setup on first run.
 
 _Set expectations accordingly_
 
