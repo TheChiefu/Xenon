@@ -2,12 +2,29 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::{AppError, Result};
 use crate::models::File;
 
 // Data Structs //
+
+/// A file the client is attaching to a message.
+#[derive(Deserialize)]
+pub struct Incoming {
+    pub file_id: Uuid,
+    #[serde(default)]
+    pub spoiler: bool,
+}
+
+/// A file as one message attaches it.
+#[derive(sqlx::FromRow)]
+pub struct Attached {
+    #[sqlx(flatten)]
+    pub file: File,
+    pub spoiler: bool,
+}
 
 /// A file joined to the message it is attached to.
 ///
@@ -16,7 +33,7 @@ use crate::models::File;
 struct AttachmentRow {
     message_id: Uuid,
     #[sqlx(flatten)]
-    file: File,
+    attached: Attached,
 }
 
 // API Methods //
@@ -35,17 +52,21 @@ struct AttachmentRow {
 pub async fn insert(
     conn: &mut sqlx::SqliteConnection,
     message_id: Uuid,
-    attachments: &[Uuid],
+    attachments: &[Incoming],
 ) -> Result<()> {
 
-    let sql = "INSERT INTO message_attachments (message_id, file_id, ordinal) VALUES (?1, ?2, ?3)";
+    let sql = "
+        INSERT INTO message_attachments (message_id, file_id, ordinal, spoiler)
+        VALUES (?1, ?2, ?3, ?4)
+    ";
 
     // Iterate over each attachment and insert into DB
-    for (pos, id) in attachments.iter().enumerate() {
+    for (pos, attachment) in attachments.iter().enumerate() {
         let result = sqlx::query(sql)
         .bind(message_id)
-        .bind(*id)
+        .bind(attachment.file_id)
         .bind(pos as i64)
+        .bind(attachment.spoiler)
         .execute(&mut *conn)
         .await;
 
@@ -54,6 +75,7 @@ pub async fn insert(
             // No "files" row for that id (client named a file that is gone)
             if let sqlx::Error::Database(db) = &e {
                 if db.is_foreign_key_violation() {
+                    let id = attachment.file_id;
                     return Err(AppError::Validation(format!("no file with id {id}")));
                 }
             }
@@ -74,11 +96,11 @@ pub async fn insert(
 pub async fn for_message(
     conn: &mut sqlx::SqliteConnection,
     message_id: Uuid,
-) -> Result<Vec<File>> {
+) -> Result<Vec<Attached>> {
 
-    let result = sqlx::query_as::<_, File>(
+    let result = sqlx::query_as::<_, Attached>(
         "
-        SELECT f.id, f.sha256, f.filename, f.mime, f.byte_size, f.created_at
+        SELECT f.id, f.sha256, f.filename, f.mime, f.byte_size, f.created_at, ma.spoiler
         FROM message_attachments ma
         JOIN files f ON f.id = ma.file_id
         WHERE ma.message_id = ?1
@@ -105,11 +127,11 @@ pub async fn for_message_range(
     room_id: Uuid,
     low: i64,
     high: i64,
-) -> Result<HashMap<Uuid, Vec<File>>> {
+) -> Result<HashMap<Uuid, Vec<Attached>>> {
 
     let rows = sqlx::query_as::<_, AttachmentRow>(
         "
-        SELECT ma.message_id, f.id, f.sha256, f.filename, f.mime, f.byte_size, f.created_at
+        SELECT ma.message_id, f.id, f.sha256, f.filename, f.mime, f.byte_size, f.created_at, ma.spoiler
         FROM message_attachments ma
         JOIN messages m ON m.id = ma.message_id
         JOIN files f ON f.id = ma.file_id
@@ -123,9 +145,9 @@ pub async fn for_message_range(
     .fetch_all(&mut *conn)
     .await?;
 
-    let mut files: HashMap<Uuid, Vec<File>> = HashMap::new();
+    let mut files: HashMap<Uuid, Vec<Attached>> = HashMap::new();
     for row in rows {
-        files.entry(row.message_id).or_default().push(row.file);
+        files.entry(row.message_id).or_default().push(row.attached);
     }
 
     Ok(files)

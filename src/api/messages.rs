@@ -4,10 +4,11 @@ pub mod attachments;
 
 use uuid::Uuid;
 
+use crate::api::messages::attachments::{Attached, Incoming};
 use crate::config;
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{File, Message, Permission, Permissions};
+use crate::models::{Message, Permission, Permissions};
 use crate::utils;
 use crate::validate;
 
@@ -49,7 +50,6 @@ pub struct Edited {
 /// * `room_id` - Room the message is posted to.
 /// * `author_id` - Who is posting.
 /// * `body` - Message contents, `None` when the message is attachments only.
-/// * `spoiler` - Whether the message renders blurred until revealed.
 /// * `client_nonce` - Client's per-composition id, reused on retry.
 /// * `attachments` - Files the message carries.
 ///
@@ -64,9 +64,8 @@ pub async fn post(
     room_id: Uuid,
     author_id: Uuid,
     body: Option<&str>,
-    spoiler: bool,
     client_nonce: [u8; 16],
-    attachments: &[Uuid],
+    attachments: &[Incoming],
 ) -> Result<Posted> {
 
     // Format checks, before any write is in flight
@@ -86,8 +85,8 @@ pub async fn post(
     let now = utils::now_ms();
     let result = sqlx::query(
         "
-        INSERT INTO messages (id, room_id, author_id, body, client_nonce, created_at, spoiler)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        INSERT INTO messages (id, room_id, author_id, body, client_nonce, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ON CONFLICT (author_id, client_nonce) DO NOTHING
         "
     )
@@ -97,7 +96,6 @@ pub async fn post(
     .bind(body)
     .bind(client_nonce.as_slice())
     .bind(now)
-    .bind(spoiler)
     .execute(&mut *tx)
     .await?;
 
@@ -121,8 +119,7 @@ pub async fn post(
             body: body.map(str::to_string),
             created_at: now,
             edited_at: None,
-            deleted_at: None,
-            spoiler
+            deleted_at: None
         })
     };
 
@@ -152,7 +149,7 @@ pub async fn fetch(
     room_id: Uuid,
     user_id: Uuid,
     cursor: Cursor,
-) -> Result<Vec<(Message, Vec<File>)>> {
+) -> Result<Vec<(Message, Vec<Attached>)>> {
 
     let mut conn = pool.acquire().await?;
 
@@ -172,7 +169,7 @@ pub async fn fetch(
     // Two directions from the anchor: below it descending, above it ascending
     let query = if older {
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
         FROM messages
         WHERE room_id = ?1 AND seq < ?2 AND deleted_at IS NULL
         ORDER BY seq DESC
@@ -180,7 +177,7 @@ pub async fn fetch(
         "
     } else {
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
         FROM messages
         WHERE room_id = ?1 AND seq > ?2 AND deleted_at IS NULL
         ORDER BY seq
@@ -387,7 +384,7 @@ pub async fn edit(
 /// Returns `AppError::Validation` if the message has neither body nor
 /// attachments, carries more attachments than the configured limit, repeats a
 /// file id, or has a body over the length limit.
-fn validate_post(body: Option<&str>, attachments: &[Uuid]) -> Result<()> {
+fn validate_post(body: Option<&str>, attachments: &[Incoming]) -> Result<()> {
 
     // No body or attachments
     if body.is_none() && attachments.is_empty() {
@@ -407,9 +404,9 @@ fn validate_post(body: Option<&str>, attachments: &[Uuid]) -> Result<()> {
     }
 
     // Check for duplicate file IDs
-    for (i, i_id) in attachments.iter().enumerate() {
-        for j_id in &attachments[i + 1..] {
-            if i_id == j_id {
+    for (i, first) in attachments.iter().enumerate() {
+        for second in &attachments[i + 1..] {
+            if first.file_id == second.file_id {
                 return Err(AppError::Validation("same file attached twice".to_string()));
             }
         }
@@ -433,7 +430,7 @@ async fn fetch_by_nonce(
 
     let message = sqlx::query_as::<_, Message>(
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
         FROM messages
         WHERE author_id = ?1 AND client_nonce = ?2
         "
@@ -463,7 +460,7 @@ async fn fetch_by_id(
 
     let message: Option<Message> = sqlx::query_as(
         "
-        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at, spoiler
+        SELECT seq, id, room_id, author_id, body, created_at, edited_at, deleted_at
         FROM messages
         WHERE id = ?1
         "

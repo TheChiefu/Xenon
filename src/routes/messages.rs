@@ -8,9 +8,9 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::api;
+use crate::api::messages::attachments::{Attached, Incoming};
 use crate::error::{AppError, Result};
 use crate::models::Message;
-use crate::routes::files::FileResponse;
 use crate::routes::websockets::ServerEvent;
 use crate::routes::{websockets, AppState, AuthUser};
 
@@ -20,17 +20,37 @@ use crate::routes::{websockets, AppState, AuthUser};
 #[derive(Deserialize)]
 pub struct PostMessageRequest {
     pub body: Option<String>,
-    #[serde(default)]
-    pub spoiler: bool,
     pub client_nonce: String,
     #[serde(default)]
-    pub attachments: Vec<Uuid>
+    pub attachments: Vec<Incoming>
 }
 
 /// PATCH body for editing a message.
 #[derive(Deserialize)]
 pub struct EditMessageRequest {
     pub body: Option<String>
+}
+
+/// One file as a message attaches it.
+#[derive(Clone, Serialize)]
+pub struct AttachmentResponse {
+    pub id: Uuid,
+    pub filename: String,
+    pub mime: String,
+    pub byte_size: i64,
+    pub spoiler: bool,
+}
+
+impl From<Attached> for AttachmentResponse {
+    fn from(attached: Attached) -> Self {
+        Self {
+            id: attached.file.id,
+            filename: attached.file.filename,
+            mime: attached.file.mime,
+            byte_size: attached.file.byte_size,
+            spoiler: attached.spoiler,
+        }
+    }
 }
 
 /// A message and the files attached to it.
@@ -44,8 +64,7 @@ pub struct MessageResponse {
     pub created_at: i64,
     pub edited_at: Option<i64>,
     pub deleted_at: Option<i64>,
-    pub spoiler: bool,
-    pub attachments: Vec<FileResponse>
+    pub attachments: Vec<AttachmentResponse>
 }
 
 /// Response carrying when a message was edited.
@@ -69,7 +88,7 @@ impl MessageResponse {
     ///
     /// * `message` - The stored message.
     /// * `attachments` - Files the message carries.
-    pub fn new(message: Message, attachments: Vec<FileResponse>) -> Self {
+    pub fn new(message: Message, attachments: Vec<AttachmentResponse>) -> Self {
         Self {
             seq: message.seq,
             id: message.id,
@@ -79,7 +98,6 @@ impl MessageResponse {
             created_at: message.created_at,
             edited_at: message.edited_at,
             deleted_at: message.deleted_at,
-            spoiler: message.spoiler,
             attachments
         }
     }
@@ -120,7 +138,6 @@ pub async fn post_message(
         room_id,
         author_id,
         body.body.as_deref(),
-        body.spoiler,
         nonce,
         &body.attachments
     ).await?;
@@ -133,7 +150,7 @@ pub async fn post_message(
     // Get all attachments in message and attach to response
     let mut conn = app_state.pool.acquire().await?;
     let files = api::messages::attachments::for_message(&mut conn, message.id).await?;
-    let attachments = files.into_iter().map(FileResponse::from).collect();
+    let attachments = files.into_iter().map(AttachmentResponse::from).collect();
     let response = MessageResponse::new(message, attachments);
 
     // If message is posted, broadcast to all subscribed users in room
@@ -177,7 +194,7 @@ pub async fn fetch_messages(
     // Convert returned vector of internal messages into vector of HTTP message responses
     let mut response = Vec::with_capacity(result.len());
     for (message, files) in result {
-        let attachments = files.into_iter().map(FileResponse::from).collect();
+        let attachments = files.into_iter().map(AttachmentResponse::from).collect();
         response.push(MessageResponse::new(message, attachments));
     }
 

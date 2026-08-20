@@ -200,8 +200,7 @@ pub struct Message {
     pub body: Option<String>,
     pub created_at: i64,
     pub edited_at: Option<i64>,
-    pub deleted_at: Option<i64>,
-    pub spoiler: bool
+    pub deleted_at: Option<i64>
 }
 
 // Files //

@@ -81,7 +81,7 @@ CREATE INDEX sessions_expiry ON sessions(expires_at) WHERE revoked_at IS NULL;
 -- no override may do. 0 is legitimate (read-only room), -1 grants everything.
 CREATE TABLE rooms (
     id                  BLOB PRIMARY KEY CHECK (length(id) = 16),
-    name                TEXT CHECK (name IS NULL OR length(name) >= 1),
+    name                TEXT NOT NULL,
     visibility          INTEGER NOT NULL CHECK (visibility IN (0, 1, 2)),
     default_permissions INTEGER NOT NULL CHECK (default_permissions >= -1),
     created_at          INTEGER NOT NULL,
@@ -126,7 +126,7 @@ CREATE INDEX room_access_user ON room_access(user_id);
 CREATE TABLE room_invites (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    invited_by  BLOB REFERENCES users(id),
+    invited_by  BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at  INTEGER NOT NULL,
     expires_at  INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
     PRIMARY KEY (room_id, user_id)
@@ -210,6 +210,7 @@ CREATE TABLE message_attachments (
     message_id  BLOB NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     file_id     BLOB NOT NULL REFERENCES files(id),
     ordinal     INTEGER NOT NULL CHECK (ordinal >= 0 AND ordinal < 32),
+    spoiler     INTEGER NOT NULL DEFAULT 0 CHECK (spoiler IN (0, 1)),
     PRIMARY KEY (message_id, ordinal),
     UNIQUE (message_id, file_id)
 ) STRICT;

@@ -4,13 +4,11 @@
 *.pdb
 
 # Database Files
-chat.db
-chat.db-shm
-chat.db-wal
+*.db
+*.db-shm
+*.db-wal
+*.db.bak
 
 # Xenon Files
 config.toml
 /files/*
-
-# Testing files
-/web/*

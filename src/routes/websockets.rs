@@ -53,7 +53,7 @@ pub async fn ws_handler(
         .on_upgrade(move |socket| handle_socket(socket, user_id, state))
 }
 
-/// Sends an event to every member of a room with an open socket.
+/// Sends an event to every member of a room.
 ///
 /// Errors are logged, not returned.
 ///
@@ -68,51 +68,28 @@ pub async fn broadcast(
     event: ServerEvent,
 ) {
 
-    // Serialize event for broadcast
-    match serde_json::to_string(&event) {
-        Ok(payload) => {
-
-            // Attempt to acquire connection
-            let mut conn = match state.pool.acquire().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    tracing::error!("broadcast could not acquire a connection: {e}");
-                    return;
-                }
-            };
-
-            // Attempt to retrieve all members of a given room
-            let members = match db::room_member_ids(&mut conn, room_id).await {
-                Ok(mem) => mem,
-                Err(e) => {
-                    tracing::error!("could not acquire room members: {e}");
-                    return;
-                }
-            };
-
-            // Get the registry lock
-            let reg = match state.registry.read() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("registry lock was poisoned, recovering");
-                    poisoned.into_inner()
-                }
-            };
-
-            // Iterate over each member and send them the message
-            for member in members {
-                if let Some(tx) = reg.get(&member) {
-                    let _ = tx.send(payload.clone());
-                }
-            }
+    // Attempt to acquire connection
+    let mut conn = match state.pool.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!("broadcast could not acquire a connection: {e}");
+            return;
         }
+    };
 
-        // Could not serialize
-        Err(e) => tracing::error!("failed to serialize server event: {e}"),
-    }
+    // Attempt to retrieve all members of a given room
+    let members = match db::room_member_ids(&mut conn, room_id).await {
+        Ok(mem) => mem,
+        Err(e) => {
+            tracing::error!("could not acquire room members: {e}");
+            return;
+        }
+    };
+
+    notify_users(state, &members, event);
 }
 
-/// Sends an event to one user's open sockets.
+/// Sends an event to one user.
 ///
 /// Errors are logged, not returned.
 ///
@@ -121,30 +98,52 @@ pub async fn broadcast(
 /// * `state` - Pool and socket registry.
 /// * `user_id` - User who receives the event.
 /// * `event` - What to send.
-pub async fn notify_user(
+pub fn notify_user(
     state: &AppState,
     user_id: Uuid,
     event: ServerEvent,
 ) {
+    notify_users(state, &[user_id], event);
+}
+
+/// Sends an event to a list of specified users.
+///
+/// Errors are logged, not returned.
+///
+/// # Arguments
+///
+/// * `state` - Pool and socket registry.
+/// * `users` - Users who receive the event.
+/// * `event` - What to send.
+pub fn notify_users(
+    state: &AppState,
+    users: &[Uuid],
+    event: ServerEvent,
+) {
 
     // Serialize event
-    match serde_json::to_string(&event) {
-        Ok(payload) => {
-            let reg = match state.registry.read() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("registry lock was poisoned, recovering");
-                    poisoned.into_inner()
-                }
-            };
-
-            if let Some(tx) = reg.get(&user_id) {
-                let _ = tx.send(payload);
-            }
+    let payload = match serde_json::to_string(&event) {
+        Ok(payload) => payload,
+        Err(e) => {
+            tracing::error!("failed to serialize server event: {e}");
+            return;
         }
+    };
 
-        // Could not serialize
-        Err(e) => tracing::error!("failed to serialize server event: {e}"),
+    // Get the registry lock
+    let reg = match state.registry.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("registry lock was poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
+
+    // Users with no open socket are absent from the registry
+    for user_id in users {
+        if let Some(tx) = reg.get(user_id) {
+            let _ = tx.send(payload.clone());
+        }
     }
 }
 

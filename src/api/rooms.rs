@@ -55,7 +55,7 @@ pub async fn get(
 pub struct RoomPatch {
     pub name: Option<String>,
     pub visibility: Option<Visibility>,
-    pub default_permissions: Option<Permissions>,
+    pub default_permissions: Option<Vec<Permission>>,
 }
 
 /// Updates a given room's properties given patch.
@@ -82,6 +82,7 @@ pub async fn update(
 
     // Check if performing managing actions
     let managing = patch.visibility.is_some() || patch.default_permissions.is_some();
+    let default_permissions = patch.default_permissions.as_deref().map(Permissions::from_list);
 
     let mut tx = pool.begin().await?;
 
@@ -111,7 +112,7 @@ pub async fn update(
     .bind(renaming)
     .bind(name)
     .bind(patch.visibility)
-    .bind(patch.default_permissions)
+    .bind(default_permissions)
     .bind(room_id)
     .execute(&mut *tx)
     .await?;

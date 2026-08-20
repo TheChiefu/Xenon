@@ -144,7 +144,7 @@ pub async fn invite_user(
     ).await?;
 
     let event = ServerEvent::Invited { room_id, invited_by: caller_id };
-    websockets::notify_user(&app_state, body.invitee, event).await;
+    websockets::notify_user(&app_state, body.invitee, event);
 
     Ok(StatusCode::CREATED)
 }
@@ -263,7 +263,7 @@ pub async fn ban_user(
     ).await?;
 
     let event = ServerEvent::Banned { room_id };
-    websockets::notify_user(&app_state, body.target_id, event).await;
+    websockets::notify_user(&app_state, body.target_id, event);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -360,9 +360,7 @@ pub async fn delete_room(
 
     // Notify everyone who was in the room
     let event = ServerEvent::RoomDeleted { room_id };
-    for member in members {
-        websockets::notify_user(&app_state, member, event.clone()).await;
-    }
+    websockets::notify_users(&app_state, &members, event);
 
     Ok(StatusCode::NO_CONTENT)
 }
