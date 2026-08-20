@@ -16,7 +16,7 @@ use crate::routes::{AppState, AuthUser};
 // Data Structs //
 
 /// An event the server pushes to a client.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
     Message { room_id: Uuid, message: MessageResponse },
@@ -24,6 +24,8 @@ pub enum ServerEvent {
     MessageEdited { room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64 },
     Invited { room_id: Uuid, invited_by: Uuid },
     Banned { room_id: Uuid },
+    RoomDeleted { room_id: Uuid },
+    RoomUpdated { room_id: Uuid },
 }
 
 // Socketing Methods //

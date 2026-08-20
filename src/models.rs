@@ -181,7 +181,7 @@ pub struct User {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct Room {
     pub id: Uuid,
-    pub name: Option<String>,
+    pub name: String,
     pub visibility: Visibility,
     pub default_permissions: Permissions,
     pub created_at: i64,

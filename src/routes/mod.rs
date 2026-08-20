@@ -135,6 +135,11 @@ pub fn router(state: AppState) -> Router {
             post(rooms::create_room)
             .get(rooms::list_discoverable_rooms)
         )
+        .route("/rooms/{id}",
+            get(rooms::get_room)
+            .delete(rooms::delete_room)
+            .patch(rooms::update)
+        )
         .route("/rooms/{id}/join", post(rooms::join_room))
         .route("/rooms/{id}/leave", post(rooms::leave_room))
         .route("/rooms/{id}/messages",

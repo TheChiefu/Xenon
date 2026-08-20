@@ -4,9 +4,10 @@ pub mod bans;
 pub mod invites;
 pub mod members;
 
+use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::db;
+use crate::db::{self, effective_permissions};
 use crate::error::{AppError, Result};
 use crate::models::{GlobalRole, Permission, Permissions, Room, Visibility};
 use crate::utils;
@@ -14,13 +15,120 @@ use crate::validate;
 
 // API Methods //
 
+
+/// Gets a room's information by ID (hidden rooms only show to users in them)
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to query
+/// * `caller_id` - Who is requesting room information
+pub async fn get(
+    pool: &sqlx::SqlitePool,
+    room_id: Uuid,
+    caller_id: Uuid,
+) -> Result<Room> {
+
+    let mut conn = pool.acquire().await?;
+    let room: Room = sqlx::query_as(
+        "
+        SELECT r.id, r.name, r.visibility, r.default_permissions, r.created_at, r.mutation_seq
+        FROM rooms r
+        WHERE r.id = ?1
+            AND (r.visibility IN (?2, ?3)
+            OR EXISTS(SELECT 1 FROM room_access a WHERE a.room_id = r.id AND a.user_id = ?4))
+        "
+    )
+    .bind(room_id)
+    .bind(Visibility::Public)
+    .bind(Visibility::Locked)
+    .bind(caller_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(room)
+}
+
+/// PATCH body for room
+#[derive(Deserialize)]
+pub struct RoomPatch {
+    pub name: Option<String>,
+    pub visibility: Option<Visibility>,
+    pub default_permissions: Option<Permissions>,
+}
+
+/// Updates a given room's properties given patch.
+/// 
+/// # Arguments
+/// 
+/// * `pool` - Pool of SQL Connections
+/// * `room_id` - Room to be patched
+/// * `caller_id` - Who is patching the room
+/// * `patch` - Patch to be applied
+pub async fn update(
+    pool: &sqlx::SqlitePool,
+    room_id: Uuid,
+    caller_id: Uuid,
+    patch: RoomPatch,
+) -> Result<()> {
+
+    // Extract name if available
+    let renaming = patch.name.is_some();
+    let name = match patch.name.as_deref() {
+        Some(value) => Some(validate::room_name(value)?),
+        None => None
+    };
+
+    // Check if performing managing actions
+    let managing = patch.visibility.is_some() || patch.default_permissions.is_some();
+
+    let mut tx = pool.begin().await?;
+
+    // Check if user has permissions
+    let perms = effective_permissions(&mut tx, room_id, caller_id).await?;
+    let perms = perms.ok_or(AppError::Forbidden)?;
+
+    // Check permissions for requested actions
+    if renaming && !perms.has(Permission::Rename) {
+        return Err(AppError::Forbidden);
+    }
+    if managing && !perms.has(Permission::Manage) {
+        return Err(AppError::Forbidden);
+    }
+
+    // - Flag decides whether the name is written
+    // - NULL coalesced parameter leaves the columns as they are unchanged
+    sqlx::query(
+        "
+        UPDATE rooms SET
+            name = CASE WHEN ?1 THEN ?2 ELSE name END,
+            visibility = COALESCE(?3, visibility),
+            default_permissions = COALESCE(?4, default_permissions)
+        WHERE id = ?5
+        "
+    )
+    .bind(renaming)
+    .bind(name)
+    .bind(patch.visibility)
+    .bind(patch.default_permissions)
+    .bind(room_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Commit transaction
+    tx.commit().await?;
+
+    Ok(())
+}
+
 /// Creates a room and grants its creator access, returning the new room id.
 ///
 /// # Arguments
 ///
 /// * `pool` - Pool of SQL connections.
 /// * `caller_id` - User creating the room.
-/// * `name` - Room name, or `None` for a room clients render as unnamed.
+/// * `name` - Room name. (NULL/None not allowed)
 /// * `caller_permissions` - Mask the creator takes, or `None` to inherit the
 ///   room defaults.
 /// * `default_permissions` - Mask a user takes on joining the room.
@@ -34,7 +142,7 @@ use crate::validate;
 pub async fn create(
     pool: &sqlx::SqlitePool,
     caller_id: Uuid,
-    name: Option<&str>,
+    name: &str,
     caller_permissions: Option<Permissions>,
     default_permissions: Permissions,
     visibility: Visibility,
@@ -98,6 +206,49 @@ pub async fn create(
     // Return room id
     Ok(room_id)
 }
+
+/// Deletes a room, returning the members who were in it so the caller can tell
+/// them it is gone.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room to be deleted.
+/// * `caller_id` - Who is attempting to delete the room.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller is not a member of the room or
+/// holds no `Permission::DeleteRoom`. A room that does not exist is also
+/// `Forbidden`, since a non-member cannot tell the two cases apart.
+pub async fn delete(
+    pool: &sqlx::SqlitePool,
+    room_id: Uuid,
+    caller_id: Uuid,
+) -> Result<Vec<Uuid>> {
+
+    let mut tx = pool.begin().await?;
+
+    // Deleting a room requires Permission::DeleteRoom
+    let perms = db::effective_permissions(&mut tx, room_id, caller_id).await?;
+    if !perms.is_some_and(|p| p.has(Permission::DeleteRoom)) {
+        return Err(AppError::Forbidden);
+    }
+
+    // Read the members before the delete
+    let members = db::room_member_ids(&mut tx, room_id).await?;
+
+    // Deletion automatically cascades removes messages, attachments, etc
+    sqlx::query("DELETE FROM rooms WHERE id = ?1")
+    .bind(room_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(members)
+}
+
 
 /// Grants a user access to a room, spending any invite they hold on it.
 ///

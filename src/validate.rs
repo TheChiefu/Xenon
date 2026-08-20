@@ -133,19 +133,14 @@ pub fn invite_params(max_uses: i64, lifetime: i64) -> Result<()> {
 /// # Errors
 ///
 /// Returns `AppError::Validation` if the trimmed name is over the length limit.
-pub fn room_name(name: Option<&str>) -> Result<Option<&str>> {
+pub fn room_name(name: &str) -> Result<&str> {
 
-    // Null values are returned as an "unnamed" room
-    let Some(val) = name else {
-        return Ok(None);
-    };
-
-    let clean = val.trim();
+    let clean = name.trim();
     let len = clean.chars().count();
 
-    // Normalize empty names as an "unnamed" room
+    // Normalize empty names as an "" string
     if len == 0 {
-        return Ok(None);
+        return Ok("");
     }
 
     // Reject names longer than allowed limit
@@ -156,7 +151,7 @@ pub fn room_name(name: Option<&str>) -> Result<Option<&str>> {
         ));
     }
 
-    Ok(Some(clean))
+    Ok(clean)
 }
 
 /// Strips any directory a client sent and returns the name alone.
