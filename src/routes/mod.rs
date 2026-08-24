@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
+use crate::utils;
 
 // App State //
 
@@ -61,11 +62,16 @@ impl AppState {
     }
 }
 
-/// The caller's id, resolved from the Authorization header, or from the
-/// offered subprotocols on a WebSocket handshake.
+/// The authenticated caller.
 ///
 /// Declared as a handler parameter, so axum authenticates before the body runs.
-pub struct AuthUser(pub Uuid);
+pub struct AuthUser(
+    /// Id of the user the session belongs to
+    pub Uuid,
+
+    /// The `sessions.token_hash` the request authenticated with
+    pub [u8; 32],
+);
 
 /// Generic over the router's state, so it survives the state type changing.
 impl<S> FromRequestParts<S> for AuthUser
@@ -77,37 +83,20 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self> {
 
-        let mut values = parts.headers.get_all(http::header::AUTHORIZATION).iter();
-        let first = values.next();
-        let second = values.next();
+        let token = bearer_token(parts)?;
 
-        // Repeated headers are joined by HTTP, so two values means two credentials were presented
-        // Reject if headers are combined, rather than pick one
-        let token: String = match (first, second) {
-            (Some(header), None) => header
-                .to_str()
-                .ok()
-                .and_then(|value| value.strip_prefix("Bearer "))
-                .ok_or(AppError::InvalidCredentials)?
-                .to_string(),
-
-            // WebSocket handshakes carry the token as a subprotocol, since a
-            // browser cannot set Authorization on one
-            (None, None) => parts.headers.get(http::header::SEC_WEBSOCKET_PROTOCOL)
-                .and_then(token_from_protocol)
-                .ok_or(AppError::InvalidCredentials)?,
-
-            _ => return Err(AppError::InvalidCredentials),
-        };
+        // Not a token this server could have issued
+        let session_hash = utils::hash_session_token(&token)
+            .ok_or(AppError::InvalidCredentials)?;
 
         // Authenticate
         let pool = SqlitePool::from_ref(state);
         let mut conn = pool.acquire().await?;
-        let user_id = db::authenticate(&mut conn, &token)
+        let user_id = db::authenticate(&mut conn, &session_hash)
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
-        Ok(AuthUser(user_id))
+        Ok(AuthUser(user_id, session_hash))
     }
 }
 
@@ -123,9 +112,14 @@ pub fn router(state: AppState) -> Router {
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
         .route("/register-code", post(auth::create_registration_code))
+        .route("/transfer-ownership", post(users::transfer_ownership))
 
         // Me
-        .route("/me", get(users::get_me))
+        .route("/me",
+            get(users::get_me)
+            .patch(users::update_me)
+        )
+        .route("/me/password", patch(users::update_my_password))
         .route("/me/rooms", get(rooms::list_my_rooms))
         .route("/me/invites", get(rooms::list_my_invites))
         .route("/me/invites/{room_id}", delete(rooms::decline_invite))
@@ -186,6 +180,42 @@ pub fn router(state: AppState) -> Router {
 }
 
 // Helper Methods //
+
+/// Reads the session token a request presents.
+///
+/// # Arguments
+///
+/// * `parts` - Head of the request being authenticated.
+///
+/// # Errors
+///
+/// Returns `AppError::InvalidCredentials` if no token is presented, or if more
+/// than one Authorization header is.
+fn bearer_token(parts: &Parts) -> Result<String> {
+
+    let mut values = parts.headers.get_all(http::header::AUTHORIZATION).iter();
+    let first = values.next();
+    let second = values.next();
+
+    // Repeated headers are joined by HTTP, so two values means two credentials were presented
+    // Reject if headers are combined, rather than pick one
+    match (first, second) {
+        (Some(header), None) => Ok(header
+            .to_str()
+            .ok()
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or(AppError::InvalidCredentials)?
+            .to_string()),
+
+        // WebSocket handshakes carry the token as a subprotocol, since a
+        // browser cannot set Authorization on one
+        (None, None) => parts.headers.get(http::header::SEC_WEBSOCKET_PROTOCOL)
+            .and_then(token_from_protocol)
+            .ok_or(AppError::InvalidCredentials),
+
+        _ => Err(AppError::InvalidCredentials),
+    }
+}
 
 /// Reads the session token from a handshake's offered subprotocols, which the
 /// client sends as `Bearer, <token>` to mirror the Authorization header.

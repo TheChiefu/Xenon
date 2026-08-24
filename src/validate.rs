@@ -74,6 +74,28 @@ pub fn display_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Checks a profile description's length.
+///
+/// # Arguments
+///
+/// * `text` - Description shown on the user's profile.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if the description is over the length limit.
+pub fn profile_description(text: &str) -> Result<()> {
+    let len = text.chars().count();
+    let max = config::get().limits.profile_description_max;
+
+    if len > max {
+        return Err(AppError::Validation(
+            format!("description error: outside of max character limit ({max})")
+        ));
+    }
+
+    Ok(())
+}
+
 /// Checks a password's length.
 ///
 /// # Arguments
@@ -124,7 +146,7 @@ pub fn invite_params(max_uses: i64, lifetime: i64) -> Result<()> {
     Ok(())
 }
 
-/// Trims a room name, returning `None` for one that is empty once trimmed.
+/// Checks a room name's length.
 ///
 /// # Arguments
 ///
@@ -132,26 +154,18 @@ pub fn invite_params(max_uses: i64, lifetime: i64) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns `AppError::Validation` if the trimmed name is over the length limit.
-pub fn room_name(name: &str) -> Result<&str> {
-
-    let clean = name.trim();
-    let len = clean.chars().count();
-
-    // Normalize empty names as an "" string
-    if len == 0 {
-        return Ok("");
-    }
-
-    // Reject names longer than allowed limit
+/// Returns `AppError::Validation` if the name is over the length limit.
+pub fn room_name(name: &str) -> Result<()> {
+    let len = name.chars().count();
     let max = config::get().limits.room_name_max;
+
     if len > max {
         return Err(AppError::Validation(
             format!("room name error: Name longer than character limit [{max}]")
         ));
     }
 
-    Ok(clean)
+    Ok(())
 }
 
 /// Strips any directory a client sent and returns the name alone.

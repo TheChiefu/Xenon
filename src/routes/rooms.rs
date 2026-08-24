@@ -68,7 +68,7 @@ pub struct DirectoryQuery {
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room to query.
 pub async fn get_room(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<Room>> {
@@ -85,7 +85,7 @@ pub async fn get_room(
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room to list from.
 pub async fn list_members(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<Vec<MemberEntry>>> {
@@ -105,7 +105,7 @@ pub async fn list_members(
 /// * `target_id` - Whose permissions are being set.
 /// * `body` - Permissions the target receives.
 pub async fn set_permissions(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<Vec<Permission>>,
@@ -129,7 +129,7 @@ pub async fn set_permissions(
 /// * `room_id` - Room being invited to.
 /// * `body` - Who to invite, and how long the invite lasts.
 pub async fn invite_user(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
     Json(body): Json<CreateRoomInvite>,
@@ -156,7 +156,7 @@ pub async fn invite_user(
 /// * `user_id` - User who receives the invites.
 /// * `pool` - Pool of SQL connections.
 pub async fn list_my_invites(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<Received>>> {
 
@@ -173,7 +173,7 @@ pub async fn list_my_invites(
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room to look in.
 pub async fn list_invites(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<Vec<Issued>>> {
@@ -191,7 +191,7 @@ pub async fn list_invites(
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room the invite is to.
 pub async fn decline_invite(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
@@ -210,7 +210,7 @@ pub async fn decline_invite(
 /// * `room_id` - Room the invite is to.
 /// * `target_id` - User the invite was addressed to.
 pub async fn revoke_invite(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
@@ -228,7 +228,7 @@ pub async fn revoke_invite(
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room to look in.
 pub async fn list_bans(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<Vec<BanEntry>>> {
@@ -247,7 +247,7 @@ pub async fn list_bans(
 /// * `room_id` - Room being banned from.
 /// * `body` - Who to ban, how long the ban lasts, and the reason.
 pub async fn ban_user(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
     Json(body): Json<CreateRoomBan>,
@@ -277,7 +277,7 @@ pub async fn ban_user(
 /// * `room_id` - Room being unbanned from.
 /// * `target_id` - Who is being unbanned.
 pub async fn unban_user(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
@@ -295,7 +295,7 @@ pub async fn unban_user(
 /// * `room_id` - What room is being updated
 /// * `body` - Patched room information
 pub async fn update(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
     Json(body): Json<RoomPatch>,
@@ -319,7 +319,7 @@ pub async fn update(
 /// * `pool` - Pool of SQL connections.
 /// * `body` - Properties to create the room with.
 pub async fn create_room(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Json(body): Json<CreateRoomRequest>,
 ) -> Result<(StatusCode, Json<CreateRoomResponse>)> {
@@ -351,7 +351,7 @@ pub async fn create_room(
 /// * `app_state` - Pool and socket registry.
 /// * `room_id` - Room to delete.
 pub async fn delete_room(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
@@ -373,7 +373,7 @@ pub async fn delete_room(
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room to join.
 pub async fn join_room(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
@@ -391,7 +391,7 @@ pub async fn join_room(
 /// * `pool` - Pool of SQL connections.
 /// * `room_id` - Room to leave.
 pub async fn leave_room(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
@@ -408,7 +408,7 @@ pub async fn leave_room(
 /// * `user_id` - Whose rooms to list.
 /// * `pool` - Pool of SQL connections.
 pub async fn list_my_rooms(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<Room>>> {
 
@@ -424,7 +424,7 @@ pub async fn list_my_rooms(
 /// * `pool` - Pool of SQL connections.
 /// * `query` - Cursor to page from, and how many rooms to return.
 pub async fn list_discoverable_rooms(
-    AuthUser(_): AuthUser,
+    AuthUser(..): AuthUser,
     State(pool): State<SqlitePool>,
     Query(query): Query<DirectoryQuery>,
 ) -> Result<Json<Vec<Room>>> {

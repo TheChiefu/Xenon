@@ -7,9 +7,12 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::api::users::ProfilePatch;
+use crate::db;
 use crate::error::Result;
 use crate::models::{GlobalRole, UserSummary};
-use crate::routes::AuthUser;
+use crate::routes::websockets::{self, ServerEvent};
+use crate::routes::{AppState, AuthUser};
 use crate::{api, config};
 
 // Data Structs //
@@ -18,6 +21,26 @@ use crate::{api, config};
 #[derive(Deserialize)]
 pub struct SetRoleRequest {
     pub role: GlobalRole,
+}
+
+/// PATCH body for replacing a password.
+#[derive(Deserialize)]
+pub struct PasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+
+    /// Revokes every session but the one making the request
+    #[serde(default)]
+    pub revoke_others: bool,
+}
+
+/// POST body for handing the server to another account.
+#[derive(Deserialize)]
+pub struct TransferOwnershipRequest {
+    pub user_id: Uuid,
+
+    /// Role the outgoing Owner keeps
+    pub demote_to: GlobalRole,
 }
 
 /// Query string for a paged user listing.
@@ -38,7 +61,7 @@ pub struct UsersQuery {
 /// * `pool` - Pool of SQL connections.
 /// * `query` - Username to match, cursor to page from, and how many to return.
 pub async fn get_users(
-    AuthUser(_): AuthUser,
+    AuthUser(..): AuthUser,
     State(pool): State<SqlitePool>,
     Query(query): Query<UsersQuery>,
 ) -> Result<Json<Vec<UserSummary>>> {
@@ -63,7 +86,7 @@ pub async fn get_users(
 /// * `pool` - Pool of SQL connections.
 /// * `user_id` - User to look up.
 pub async fn get_user(
-    AuthUser(_): AuthUser,
+    AuthUser(..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<UserSummary>> {
@@ -80,13 +103,85 @@ pub async fn get_user(
 /// * `user_id` - Whose profile to return.
 /// * `pool` - Pool of SQL connections.
 pub async fn get_me(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<UserSummary>> {
 
     let user = api::users::get(&pool, user_id).await?;
 
     Ok(Json(user))
+}
+
+/// Writes the caller's own profile.
+///
+/// # Arguments
+///
+/// * `user_id` - Whose profile is being written.
+/// * `app_state` - Pool and socket registry.
+/// * `body` - Fields to change.
+pub async fn update_me(
+    AuthUser(user_id, ..): AuthUser,
+    State(app_state): State<AppState>,
+    Json(body): Json<ProfilePatch>,
+) -> Result<StatusCode> {
+
+    // A name comes back only when the patch carried one
+    let sent_name = api::users::update(&app_state.pool, user_id, body).await?;
+
+    // Notify everyone sharing a room, the user sent a display name
+    if let Some(display_name) = sent_name {
+        let mut conn = app_state.pool.acquire().await?;
+        let members = db::shared_room_member_ids(&mut conn, user_id).await?;
+
+        let event = ServerEvent::ProfileUpdated { user_id, display_name };
+        websockets::notify_users(&app_state, &members, event);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Replaces the caller's password.
+///
+/// # Arguments
+///
+/// * `user_id` - Whose password is being replaced.
+/// * `session_hash` - The caller's own session, kept when revoking the rest.
+/// * `pool` - Pool of SQL connections.
+/// * `body` - Current password, replacement, and whether to revoke elsewhere.
+pub async fn update_my_password(
+    AuthUser(user_id, session_hash): AuthUser,
+    State(pool): State<SqlitePool>,
+    Json(body): Json<PasswordRequest>,
+) -> Result<StatusCode> {
+
+    api::auth::change_password(
+        &pool,
+        user_id,
+        &body.current_password,
+        &body.new_password,
+        body.revoke_others,
+        &session_hash,
+    ).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Hands the server to another account.
+///
+/// # Arguments
+///
+/// * `caller_id` - The Owner giving the server away.
+/// * `pool` - Pool of SQL connections.
+/// * `body` - Account receiving Owner, and the role the caller keeps.
+pub async fn transfer_ownership(
+    AuthUser(caller_id, ..): AuthUser,
+    State(pool): State<SqlitePool>,
+    Json(body): Json<TransferOwnershipRequest>,
+) -> Result<StatusCode> {
+
+    api::users::transfer_ownership(&pool, caller_id, body.user_id, body.demote_to).await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Promotes or demotes a user.
@@ -98,7 +193,7 @@ pub async fn get_me(
 /// * `target_id` - User whose role changes.
 /// * `body` - The role to set.
 pub async fn set_role(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(target_id): Path<Uuid>,
     Json(body): Json<SetRoleRequest>,

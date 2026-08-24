@@ -114,7 +114,7 @@ impl MessageResponse {
 /// * `room_id` - Room to post in.
 /// * `body` - Message contents, nonce, and any attachments.
 pub async fn post_message(
-    AuthUser(author_id): AuthUser,
+    AuthUser(author_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
     Json(body): Json<PostMessageRequest>,
@@ -172,7 +172,7 @@ pub async fn post_message(
 /// * `room_id` - Room to read from.
 /// * `query` - Cursor to page from.
 pub async fn fetch_messages(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
     Query(query): Query<FetchQuery>,
@@ -209,7 +209,7 @@ pub async fn fetch_messages(
 /// * `app_state` - Pool and socket registry.
 /// * `message_id` - Message to delete.
 pub async fn delete_message(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(message_id): Path<Uuid>,
 ) -> Result<StatusCode> {
@@ -231,7 +231,7 @@ pub async fn delete_message(
 /// * `message_id` - Message to edit.
 /// * `request` - The new body.
 pub async fn update_message(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(app_state): State<AppState>,
     Path(message_id): Path<Uuid>,
     Json(request): Json<EditMessageRequest>,

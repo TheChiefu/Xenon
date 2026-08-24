@@ -68,7 +68,7 @@ pub async fn post(
     attachments: &[Incoming],
 ) -> Result<Posted> {
 
-    // Format checks, before any write is in flight
+    // Format checks, before the transaction opens
     validate_post(body, attachments)?;
 
     // Start transaction
@@ -372,7 +372,7 @@ pub async fn edit(
 
 // Helper Methods //
 
-/// Checks a post's shape before any write is in flight.
+/// Checks a post's body and attachment count.
 ///
 /// # Arguments
 ///

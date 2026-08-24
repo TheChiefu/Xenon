@@ -32,7 +32,7 @@ CREATE TABLE users (
     username        TEXT NOT NULL UNIQUE
                     CHECK (username NOT GLOB '*[^a-z0-9_-]*' AND length(username) >= 1),
     display_name    TEXT NOT NULL CHECK (length(display_name) >= 1),
-    description     TEXT CHECK (description IS NULL OR length(description) <= 2000),
+    description     TEXT NOT NULL DEFAULT '',
     avatar_file_id  BLOB REFERENCES files(id),
     banner_file_id  BLOB REFERENCES files(id),
     password_hash   TEXT,

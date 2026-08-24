@@ -75,10 +75,14 @@ pub async fn update(
 
     // Extract name if available
     let renaming = patch.name.is_some();
-    let name = match patch.name.as_deref() {
-        Some(value) => Some(validate::room_name(value)?),
-        None => None
-    };
+    let mut name = patch.name.as_deref().unwrap_or("");
+
+    // A name of nothing but spaces is stored as empty
+    if name.trim().is_empty() {
+        name = "";
+    }
+
+    validate::room_name(name)?;
 
     // Check if performing managing actions
     let managing = patch.visibility.is_some() || patch.default_permissions.is_some();
@@ -159,8 +163,13 @@ pub async fn create(
         ));
     }
 
-    // Format validation, before any write is in flight
-    let clean_room_name = validate::room_name(name)?;
+    // A name of nothing but spaces is stored as the empty name
+    let mut clean_room_name = name;
+    if clean_room_name.trim().is_empty() {
+        clean_room_name = "";
+    }
+
+    validate::room_name(clean_room_name)?;
 
     // Open transaction
     let mut tx = pool.begin().await?;

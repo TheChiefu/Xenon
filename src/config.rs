@@ -134,12 +134,27 @@ impl Config {
             return Err("session.renew_after_days_elapsed must be less than session.lifetime_days".to_string());
         }
 
-        range("username", self.limits.username_min, self.limits.username_max)?;
-        range("display_name", self.limits.display_name_min, self.limits.display_name_max)?;
-        range("password", self.limits.password_min, self.limits.password_max)?;
-        range("room_name", 1, self.limits.room_name_max)?;
-        range("message_body", 1, self.limits.message_body_max)?;
-    
+        if self.limits.username_min < 1 || self.limits.username_max < self.limits.username_min {
+            return Err("limits.username_min must be at least 1 and no greater than limits.username_max".to_string());
+        }
+
+        if self.limits.display_name_min < 1 || self.limits.display_name_max < self.limits.display_name_min {
+            return Err("limits.display_name_min must be at least 1 and no greater than limits.display_name_max".to_string());
+        }
+
+        if self.limits.password_min < 1 || self.limits.password_max < self.limits.password_min {
+            return Err("limits.password_min must be at least 1 and no greater than limits.password_max".to_string());
+        }
+
+        if self.limits.room_name_max < 1 {
+            return Err("limits.room_name_max must be at least 1".to_string());
+        }
+
+        if self.limits.message_body_max < 1 {
+            return Err("limits.message_body_max must be at least 1".to_string());
+        }
+
+
         if ByteSize::to_int(self.limits.file_bytes_max) <= 0 {
             return Err("limits.file_bytes_max must be at least 1 byte".to_string());
         }
@@ -210,25 +225,6 @@ impl Config {
     pub fn tls_configured(&self) -> bool {
         self.bind.certificate.is_some() && self.bind.key.is_some()
     }
-}
-
-/// Verify that the field's given value is within the expected range
-///
-/// # Arguments
-///
-/// * `name` - Limit being checked, used in the returned message.
-/// * `min` - Lowest value the limit allows.
-/// * `max` - Highest value the limit allows.
-fn range(name: &str, min: usize, max: usize) -> Result<(), String> {
-    if min < 1 {
-        return Err(format!("limits.{name}_min must be at least 1"));
-    }
-
-    if max < min {
-        return Err(format!("limits.{name}_max must be at least limits.{name}_min"));
-    }
-
-    Ok(())
 }
 
 /// Public accessor for static global config
@@ -331,6 +327,7 @@ pub struct Limits {
     pub username_max: usize,
     pub display_name_min: usize,
     pub display_name_max: usize,
+    pub profile_description_max: usize,
     pub room_name_max: usize,
     pub message_body_max: usize,
     pub password_min: usize,
@@ -350,6 +347,7 @@ impl Default for Limits {
             username_max: 32,
             display_name_min: 1,
             display_name_max: 64,
+            profile_description_max: 2000,
             room_name_max: 128,
             message_body_max: 8000,
             password_min: 8,

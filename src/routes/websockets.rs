@@ -28,6 +28,7 @@ pub enum ServerEvent {
     Banned { room_id: Uuid },
     RoomDeleted { room_id: Uuid },
     RoomUpdated { room_id: Uuid },
+    ProfileUpdated { user_id: Uuid, display_name: String },
     Resync,
 }
 
@@ -41,7 +42,7 @@ pub enum ServerEvent {
 /// * `state` - Pool and socket registry.
 /// * `ws` - The upgrade handshake.
 pub async fn ws_handler(
-    AuthUser(user_id): AuthUser,
+    AuthUser(user_id, ..): AuthUser,
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> Response {

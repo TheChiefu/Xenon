@@ -50,7 +50,7 @@ impl From<File> for FileResponse {
 /// * `pool` - Pool of SQL connections.
 /// * `multipart` - Request body carrying the file.
 pub async fn upload(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<FileResponse>)> {
@@ -95,7 +95,7 @@ pub async fn upload(
 /// * `pool` - Pool of SQL connections.
 /// * `file_id` - File to send.
 pub async fn download(
-    AuthUser(_): AuthUser,
+    AuthUser(..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(file_id): Path<Uuid>,
 ) -> Result<Response> {

@@ -16,22 +16,17 @@ pub const DAY: i64 = 86400000;
 /// Resolves a session token to the user it belongs to, extending the session.
 ///
 /// A session past its renewal threshold has its expiry pushed out, so an active
-/// client never has to log in again. A malformed, revoked, or expired token
+/// client never has to log in again. An unknown, revoked, or expired token
 /// returns `Ok(None)`.
 ///
 /// # Arguments
 ///
 /// * `conn` - Connection to SQL DB.
-/// * `secret` - Session token presented by the client.
+/// * `token_hash` - Hash of the session token presented by the client.
 pub async fn authenticate(
     conn: &mut sqlx::SqliteConnection,
-    secret: &str,
+    token_hash: &[u8],
 ) -> Result<Option<Uuid>> {
-
-    // Not a token this server could have issued
-    let Some(hash) = utils::hash_session_token(secret) else {
-        return Ok(None);
-    };
 
     // Fetch user id and session expiry information
     let now: i64 = utils::now_ms();
@@ -41,7 +36,7 @@ pub async fn authenticate(
         WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2
         "
     )
-    .bind(hash.as_slice())
+    .bind(token_hash)
     .bind(now)
     .fetch_optional(&mut *conn)
     .await?;
@@ -62,7 +57,7 @@ pub async fn authenticate(
         )
         .bind(utils::now_ms())
         .bind(lifetime)
-        .bind(hash.as_slice())
+        .bind(token_hash)
         .execute(&mut *conn)
         .await?;
     }
@@ -288,6 +283,31 @@ pub async fn room_member_ids(
         "
     )
     .bind(room_id)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(members)
+}
+
+/// Lists the ids of everyone sharing a room with a user, the user included.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - User whose rooms are read.
+pub async fn shared_room_member_ids(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>> {
+
+    let members: Vec<Uuid> = sqlx::query_scalar(
+        "
+        SELECT DISTINCT user_id
+        FROM room_access
+        WHERE room_id IN (SELECT room_id FROM room_access WHERE user_id = ?1)
+        "
+    )
+    .bind(user_id)
     .fetch_all(&mut *conn)
     .await?;
 

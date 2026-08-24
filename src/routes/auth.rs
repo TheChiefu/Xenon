@@ -104,7 +104,7 @@ pub async fn login(
 /// * `pool` - Pool of SQL connections.
 /// * `body` - Use count and lifetime, each optional.
 pub async fn create_registration_code(
-    AuthUser(caller_id): AuthUser,
+    AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Json(body): Json<CreateInviteRequest>,
 ) -> Result<(StatusCode, Json<CreateInviteResponse>)> {

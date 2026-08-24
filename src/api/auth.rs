@@ -90,6 +90,91 @@ pub async fn register(
     Ok((id, token))
 }
 
+/// Replaces a user's password, optionally revoking the sessions they hold
+/// elsewhere.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `user_id` - User whose password is being replaced.
+/// * `current_password` - Password being replaced, re-verified before the write.
+/// * `new_password` - Password to hash and store.
+/// * `revoke_others` - Whether the user's other sessions are revoked.
+/// * `session_hash` - `sessions.token_hash` of the caller, kept when revoking.
+///
+/// # Errors
+///
+/// Returns `AppError::Validation` if the new password is outside its length
+/// limits, and `AppError::InvalidCredentials` if the current password does not
+/// verify.
+pub async fn change_password(
+    pool: &sqlx::SqlitePool,
+    user_id: Uuid,
+    current_password: &str,
+    new_password: &str,
+    revoke_others: bool,
+    session_hash: &[u8],
+) -> Result<()> {
+
+    validate::password(new_password)?;
+
+    let mut tx = pool.begin().await?;
+
+    // Get stored password hash to check
+    let stored_hash: Option<String> = sqlx::query_scalar(
+        "
+        SELECT password_hash
+        FROM users
+        WHERE id = ?1
+        "
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten();
+
+    // No row, or the NULL hash a tombstoned account carries: nothing to verify against
+    let stored_hash = stored_hash.ok_or(AppError::InvalidCredentials)?;
+
+    // Check if given current password matches the one stored in the DB
+    if !utils::verify_password(current_password, &stored_hash)? {
+        return Err(AppError::InvalidCredentials);
+    }
+
+    // Hash new password and update in DB
+    let password_hash = utils::hash_password(new_password)?;
+    sqlx::query(
+        "
+        UPDATE users SET password_hash = ?1
+        WHERE id = ?2
+        "
+    )
+    .bind(password_hash)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // If revocation is set, clear all other sessions except current one
+    if revoke_others {
+        sqlx::query(
+            "
+            UPDATE sessions SET revoked_at = ?1
+            WHERE user_id = ?2 AND token_hash <> ?3 AND revoked_at IS NULL
+            "
+        )
+        .bind(utils::now_ms())
+        .bind(user_id)
+        .bind(session_hash)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Commit transacation
+    tx.commit().await?;
+
+    Ok(())
+}
+
 /// Verifies credentials and returns a new session token.
 ///
 /// An unknown username runs `burn_verify`, so it costs the same time as a wrong
