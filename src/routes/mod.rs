@@ -118,6 +118,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me",
             get(users::get_me)
             .patch(users::update_me)
+            .delete(users::delete_me)
         )
         .route("/me/password", patch(users::update_my_password))
         .route("/me/rooms", get(rooms::list_my_rooms))
@@ -168,7 +169,10 @@ pub fn router(state: AppState) -> Router {
 
         // Users
         .route("/users", get(users::get_users))
-        .route("/users/{id}", get(users::get_user))
+        .route("/users/{id}",
+            get(users::get_user)
+            .delete(users::delete_user)
+        )
         .route("/users/{id}/role", patch(users::set_role))
 
         // Other

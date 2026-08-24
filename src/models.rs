@@ -151,28 +151,28 @@ impl Default for Permissions {
 
 // Users //
 
-/// Subset of a user, safe to hand to authenticated callers.
+/// Who a user is at a glance
 #[derive(sqlx::FromRow, Serialize)]
 pub struct UserSummary {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
-    pub global_role: GlobalRole,
 }
 
-/// A `users` row.
+/// A user's profile, holding every column a client may see.
 #[derive(sqlx::FromRow, Serialize)]
-pub struct User {
+pub struct UserProfile {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
     pub description: String,
-    pub avatar_file_id: Uuid,
-    pub banner_file_id: Uuid,
-    pub global_role: i8,
-    pub status_pref: i8,
+    pub avatar_file_id: Option<Uuid>,
+    pub banner_file_id: Option<Uuid>,
+    pub global_role: GlobalRole,
     pub created_at: i64,
-    pub deleted_at: i64
+
+    /// Set on a tombstoned account, which a client marks rather than hides
+    pub deleted_at: Option<i64>
 }
 
 // Room //

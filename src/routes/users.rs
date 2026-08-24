@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::api::users::ProfilePatch;
 use crate::db;
 use crate::error::Result;
-use crate::models::{GlobalRole, UserSummary};
+use crate::models::{GlobalRole, UserProfile, UserSummary};
 use crate::routes::websockets::{self, ServerEvent};
 use crate::routes::{AppState, AuthUser};
 use crate::{api, config};
@@ -41,6 +41,18 @@ pub struct TransferOwnershipRequest {
 
     /// Role the outgoing Owner keeps
     pub demote_to: GlobalRole,
+}
+
+/// DELETE body for closing your own account.
+#[derive(Deserialize)]
+pub struct DeleteAccountRequest {
+    /// Replaces the names and releases the username
+    #[serde(default)]
+    pub anonymize: bool,
+
+    /// Tombstones every message the account wrote
+    #[serde(default)]
+    pub delete_history: bool,
 }
 
 /// Query string for a paged user listing.
@@ -89,7 +101,7 @@ pub async fn get_user(
     AuthUser(..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(user_id): Path<Uuid>,
-) -> Result<Json<UserSummary>> {
+) -> Result<Json<UserProfile>> {
 
     let user = api::users::get(&pool, user_id).await?;
 
@@ -105,7 +117,7 @@ pub async fn get_user(
 pub async fn get_me(
     AuthUser(user_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
-) -> Result<Json<UserSummary>> {
+) -> Result<Json<UserProfile>> {
 
     let user = api::users::get(&pool, user_id).await?;
 
@@ -125,11 +137,11 @@ pub async fn update_me(
     Json(body): Json<ProfilePatch>,
 ) -> Result<StatusCode> {
 
-    // A name comes back only when the patch carried one
-    let sent_name = api::users::update(&app_state.pool, user_id, body).await?;
+    // New display name if changed, otherwise None
+    let updated_name = api::users::update(&app_state.pool, user_id, body).await?;
 
-    // Notify everyone sharing a room, the user sent a display name
-    if let Some(display_name) = sent_name {
+    // Notify everyone sharing a room that the user changed their display name
+    if let Some(display_name) = updated_name {
         let mut conn = app_state.pool.acquire().await?;
         let members = db::shared_room_member_ids(&mut conn, user_id).await?;
 
@@ -180,6 +192,44 @@ pub async fn transfer_ownership(
 ) -> Result<StatusCode> {
 
     api::users::transfer_ownership(&pool, caller_id, body.user_id, body.demote_to).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Closes the caller's own account.
+///
+/// # Arguments
+///
+/// * `user_id` - Account being closed.
+/// * `pool` - Pool of SQL connections.
+/// * `body` - Whether to anonymize the names and whether to drop the history.
+pub async fn delete_me(
+    AuthUser(user_id, ..): AuthUser,
+    State(pool): State<SqlitePool>,
+    Json(body): Json<DeleteAccountRequest>,
+) -> Result<StatusCode> {
+
+    api::users::delete(&pool, user_id, body.anonymize, body.delete_history).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Closes someone else's account.
+///
+/// # Arguments
+///
+/// * `caller_id` - Who is closing the account.
+/// * `pool` - Pool of SQL connections.
+/// * `target_id` - Account being closed.
+/// * `body` - Whether to anonymize the names.
+pub async fn delete_user(
+    AuthUser(caller_id, ..): AuthUser,
+    State(pool): State<SqlitePool>,
+    Path(target_id): Path<Uuid>,
+    Json(body): Json<DeleteAccountRequest>,
+) -> Result<StatusCode> {
+
+    api::users::delete_other(&pool, caller_id, target_id, body.anonymize).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

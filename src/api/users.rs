@@ -3,9 +3,11 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::api::rooms::members;
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{GlobalRole, UserSummary};
+use crate::models::{GlobalRole, UserProfile, UserSummary};
+use crate::utils;
 use crate::validate;
 
 // Data Structs //
@@ -55,7 +57,7 @@ pub async fn list(
 
     let users: Vec<UserSummary> = sqlx::query_as(
         "
-        SELECT id, username, display_name, global_role
+        SELECT id, username, display_name
         FROM users u
         WHERE (?1 IS NULL OR u.id > ?1)
             AND (?2 IS NULL OR u.username LIKE ?2 ESCAPE '\\')
@@ -86,13 +88,14 @@ pub async fn list(
 pub async fn get(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
-) -> Result<UserSummary> {
+) -> Result<UserProfile> {
 
     let mut conn = pool.acquire().await?;
 
-    let user: Option<UserSummary> = sqlx::query_as(
+    let user: Option<UserProfile> = sqlx::query_as(
         "
-        SELECT id, username, display_name, global_role
+        SELECT id, username, display_name, description, avatar_file_id,
+               banner_file_id, global_role, created_at, deleted_at
         FROM users
         WHERE id = ?1
         "
@@ -155,6 +158,87 @@ pub async fn update(
     .await?;
 
     Ok(patch.display_name)
+}
+
+/// Tombstones an account, stripping its credentials and profile while leaving
+/// the row so messages and membership history still resolve.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `user_id` - Account being closed.
+/// * `anonymize` - Whether the names are replaced and the username released.
+/// * `delete_history` - Whether every message the account wrote is tombstoned.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the account holds Owner.
+pub async fn delete(
+    pool: &sqlx::SqlitePool,
+    user_id: Uuid,
+    anonymize: bool,
+    delete_history: bool,
+) -> Result<()> {
+
+    let mut tx = pool.begin().await?;
+
+    // one_owner needs a live owner, so the server is handed over first
+    if db::global_role(&mut tx, user_id).await? == GlobalRole::Owner {
+        return Err(AppError::Forbidden);
+    }
+
+    if delete_history {
+        tombstone_messages(&mut tx, user_id).await?;
+    }
+
+    leave_every_room(&mut tx, user_id).await?;
+    clear_owned_rows(&mut tx, user_id).await?;
+    strip_profile(&mut tx, user_id, anonymize).await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// Closes someone else's account.
+///
+/// The messages are always kept: destroying another member's history is a
+/// room's decision, made through its own wipe.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `caller_id` - User closing the account.
+/// * `target_id` - Account being closed.
+/// * `anonymize` - Whether the names are replaced and the username released.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if the caller is neither Owner nor Admin, if
+/// an Admin targets another Admin, or if the target holds Owner.
+pub async fn delete_other(
+    pool: &sqlx::SqlitePool,
+    caller_id: Uuid,
+    target_id: Uuid,
+    anonymize: bool,
+) -> Result<()> {
+
+    let mut conn = pool.acquire().await?;
+
+    // Is the caller ranked high enough to close another account
+    let caller_role = db::global_role(&mut conn, caller_id).await?;
+    let permissible_roles = [GlobalRole::Owner, GlobalRole::Admin];
+    if !permissible_roles.contains(&caller_role) {
+        return Err(AppError::Forbidden);
+    }
+
+    // Admins can't close each other's accounts
+    let target_role = db::global_role(&mut conn, target_id).await?;
+    if caller_role == GlobalRole::Admin && target_role == GlobalRole::Admin {
+        return Err(AppError::Forbidden);
+    }
+
+    delete(pool, target_id, anonymize, false).await
 }
 
 /// Hands the server to another account, setting the caller to `demote_to`.
@@ -259,6 +343,154 @@ pub async fn set_role(
     }
 
     tx.commit().await?;
+
+    Ok(())
+}
+
+// Helper Methods //
+
+/// Tombstones every message an account wrote, destroying the text and bumping
+/// the rooms that held them so clients refetch.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - Author whose messages are tombstoned.
+async fn tombstone_messages(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+) -> Result<()> {
+
+    sqlx::query(
+        "
+        UPDATE rooms SET mutation_seq = mutation_seq + 1
+        WHERE id IN (SELECT DISTINCT room_id FROM messages WHERE author_id = ?1)
+        "
+    )
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?;
+
+    sqlx::query(
+        "
+        DELETE FROM message_attachments
+        WHERE message_id IN (SELECT id FROM messages WHERE author_id = ?1)
+        "
+    )
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?;
+
+    // Tombstoned rather than deleted, so an offline client learns they are gone
+    sqlx::query(
+        "
+        UPDATE messages SET body = NULL, deleted_at = ?1
+        WHERE author_id = ?2 AND deleted_at IS NULL
+        "
+    )
+    .bind(utils::now_ms())
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(())
+}
+
+/// Removes an account from every room it belongs to, one room at a time so each
+/// runs the same cull and promotion checks a single removal does.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - Account being removed.
+async fn leave_every_room(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+) -> Result<()> {
+
+    let rooms: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT room_id FROM room_access WHERE user_id = ?1"
+    )
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    for room_id in rooms {
+        members::remove(&mut *conn, room_id, user_id).await?;
+    }
+
+    Ok(())
+}
+
+/// Deletes the rows an account owns
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - Account whose rows are dropped.
+async fn clear_owned_rows(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+) -> Result<()> {
+
+    let statements = [
+        "DELETE FROM sessions WHERE user_id = ?1",
+        "DELETE FROM read_state WHERE user_id = ?1",
+        "DELETE FROM linked_accounts WHERE user_id = ?1",
+        "DELETE FROM user_files WHERE user_id = ?1",
+        "DELETE FROM room_invites WHERE user_id = ?1",
+    ];
+
+    for statement in statements {
+        sqlx::query(statement)
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Strips the credentials and profile from an account's row, optionally
+/// replacing the names with ones derived from its own id.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - Account being stripped.
+/// * `anonymize` - Whether the names are replaced and the username released.
+async fn strip_profile(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+    anonymize: bool,
+) -> Result<()> {
+
+    // Set profile username to ID to tombstone it and free it for new users
+    let hex = user_id.simple().to_string();
+    let display_name = format!("Deleted User {}", &hex[..6]);
+
+    // NULL the password_hash to make the account unloginable
+    sqlx::query(
+        "
+        UPDATE users SET
+            username = CASE WHEN ?1 THEN ?2 ELSE username END,
+            display_name = CASE WHEN ?1 THEN ?3 ELSE display_name END,
+            password_hash = NULL,
+            description = '',
+            avatar_file_id = NULL,
+            banner_file_id = NULL,
+            email = NULL,
+            deleted_at = ?4
+        WHERE id = ?5
+        "
+    )
+    .bind(anonymize)
+    .bind(&hex)
+    .bind(&display_name)
+    .bind(utils::now_ms())
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await?;
 
     Ok(())
 }
