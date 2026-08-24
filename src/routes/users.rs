@@ -148,6 +148,7 @@ pub async fn update_me(
         let event = ServerEvent::ProfileUpdated {
             user_id,
             display_name: profile.display_name,
+            description: profile.description,
             avatar_file_id: profile.avatar_file_id,
             banner_file_id: profile.banner_file_id,
         };

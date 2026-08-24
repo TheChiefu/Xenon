@@ -31,6 +31,7 @@ pub enum ServerEvent {
     ProfileUpdated {
         user_id: Uuid,
         display_name: String,
+        description: String,
         avatar_file_id: Option<Uuid>,
         banner_file_id: Option<Uuid>
     },
