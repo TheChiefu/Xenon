@@ -55,7 +55,7 @@ pub async fn store<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let files_path = &config::get().storage.files_path;
+    let files_path = &config::get().storage.files;
 
     // End file location is unknown until hashed,
     // write with tmp location/name until finished
@@ -129,7 +129,7 @@ pub async fn fetch(
 
     // Rebuild path based on SHA256
     let hex_sha = hex::encode(&file.sha256);
-    let directory = create_shard_path(&config::get().storage.files_path, &hex_sha);
+    let directory = create_shard_path(&config::get().storage.files, &hex_sha);
     let path = directory.join(&hex_sha);
 
     // Get file reader handle

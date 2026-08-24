@@ -12,3 +12,7 @@
 # Xenon Files
 config.toml
 /files/*
+*.log
+
+# Testing files
+/web/*

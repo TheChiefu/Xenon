@@ -1,6 +1,7 @@
 //! The config file, read once at startup and readable from anywhere after.
 
 use std::sync::OnceLock;
+use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,26 +18,24 @@ const CONFIG_VERSION: u8 = 1;
 #[serde(default)]
 pub struct Config {
     pub version: u8,
+    pub info: Info,
     pub bind: Bind,
     pub storage: Storage,
+    pub logging: Logging,
     pub session: Session,
     pub limits: Limits,
-    pub paging: Paging,
-    pub socket: Socket,
-    pub info: Info,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             version: CONFIG_VERSION,
+            info: Info::default(),
             bind: Bind::default(),
             storage: Storage::default(),
+            logging: Logging::default(),
             session: Session::default(),
             limits: Limits::default(),
-            paging: Paging::default(),
-            socket: Socket::default(),
-            info: Info::default(),
         }
     }
 }
@@ -108,12 +107,22 @@ impl Config {
             return Err("bind.port must be greater than 0".to_string());
         }
 
-        if self.storage.db_path.is_empty() {
-            return Err("storage.db_path must be set".to_string());
+        if self.bind.ip.parse::<IpAddr>().is_err() {
+            return Err(format!("bind.ip must be an IPv4 or IPv6 address, got \"{}\"", self.bind.ip));
         }
 
-        if self.storage.files_path.is_empty() {
-            return Err("storage.files_path must be set".to_string());
+        match (&self.bind.certificate, &self.bind.key) {
+            (Some(_), None) => return Err("bind.key must be set alongside bind.certificate".to_string()),
+            (None, Some(_)) => return Err("bind.certificate must be set alongside bind.key".to_string()),
+            _ => {}
+        }
+
+        if self.storage.database.is_empty() {
+            return Err("storage.database must be set".to_string());
+        }
+
+        if self.storage.files.is_empty() {
+            return Err("storage.files must be set".to_string());
         }
 
         if self.session.lifetime_days < 1 {
@@ -141,20 +150,31 @@ impl Config {
             return Err("limits.attachments_per_message_max must be between 1 and 32".to_string());
         }
 
-        if self.paging.message_page < 1 {
-            return Err("paging.message_page must be at least 1".to_string());
+        if self.limits.message_page < 1 {
+            return Err("limits.message_page must be at least 1".to_string());
         }
 
-        if self.paging.room_page < 1 {
-            return Err("paging.room_page must be at least 1".to_string());
+        if self.limits.room_page < 1 {
+            return Err("limits.room_page must be at least 1".to_string());
         }
 
-        if self.paging.users_page < 1 {
-            return Err("paging.user_page must be at least 1".to_string());
+        if self.limits.users_page < 1 {
+            return Err("limits.users_page must be at least 1".to_string());
         }
 
-        if self.socket.message_buffer < 1 {
-            return Err("socket.message_buffer must be at least 1".to_string());
+        if self.limits.message_buffer < 1 {
+            return Err("limits.message_buffer must be at least 1".to_string());
+        }
+
+        if !matches!(self.logging.level.as_str(), "trace" | "debug" | "info" | "warn" | "error") {
+            return Err(format!(
+                "logging.level must be trace, debug, info, warn, or error, got \"{}\"",
+                self.logging.level
+            ));
+        }
+
+        if self.logging.file.is_empty() {
+            tracing::warn!("logging.file is not set, tracing calls go to stdout only")
         }
 
         if self.info.name.is_empty() {
@@ -170,6 +190,25 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    /// The address the listener binds.
+    /// Panics if `bind.ip` does not parse.
+    pub fn socket_addr(&self) -> SocketAddr {
+        SocketAddr::new(
+            self.bind.ip.parse().expect("bind.ip validated at startup"),
+            self.bind.port
+        )
+    }
+
+    /// Whether the listener binds a loopback address.
+    pub fn binds_loopback(&self) -> bool {
+        self.socket_addr().ip().is_loopback()
+    }
+
+    /// Whether a certificate and key are configured for the listener.
+    pub fn tls_configured(&self) -> bool {
+        self.bind.certificate.is_some() && self.bind.key.is_some()
     }
 }
 
@@ -207,14 +246,21 @@ pub fn get() -> &'static Config {
 #[serde(default)]
 pub struct Bind {
     pub ip: String,
-    pub port: u16
+    pub port: u16,
+    /// PEM certificate chain served to clients
+    pub certificate: Option<String>,
+
+    /// PEM private key for `certificate`
+    pub key: Option<String>,
 }
 
 impl Default for Bind {
     fn default() -> Self {
         Bind {
             ip: "127.0.0.1".to_string(),
-            port: 3000
+            port: 3000,
+            certificate: None,
+            key: None
         }
     }
 }
@@ -223,17 +269,36 @@ impl Default for Bind {
 #[serde(default)]
 pub struct Storage {
     /// SQLite database file
-    pub db_path: String,
+    pub database: String,
 
     /// Directory holding uploaded files, sharded by hash
-    pub files_path: String
+    pub files: String
 }
 
 impl Default for Storage {
     fn default() -> Self {
         Storage {
-            db_path: "chat.db".to_string(),
-            files_path: "files".to_string()
+            database: "chat.db".to_string(),
+            files: "files".to_string()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Logging {
+    /// File every tracing call is appended to, empty for stdout only
+    pub file: String,
+
+    /// Lowest level this server's own tracing calls are written at
+    pub level: String
+}
+
+impl Default for Logging {
+    fn default() -> Self {
+        Logging {
+            file: "xenon.log".to_string(),
+            level: "info".to_string()
         }
     }
 }
@@ -271,7 +336,11 @@ pub struct Limits {
     pub password_min: usize,
     pub password_max: usize,
     pub file_bytes_max: ByteSize,
-    pub attachments_per_message_max: usize
+    pub attachments_per_message_max: usize,
+    pub message_page: i64,
+    pub room_page: i64,
+    pub users_page: i64,
+    pub message_buffer: usize
 }
 
 impl Default for Limits {
@@ -286,43 +355,14 @@ impl Default for Limits {
             password_min: 8,
             password_max: 128,
             file_bytes_max: ByteSize::from_int(25 * MEBIBYTE),
-            attachments_per_message_max: 10
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(default)]
-pub struct Paging {
-    pub message_page: i64,
-    pub room_page: i64,
-    pub users_page: i64,
-}
-
-impl Default for Paging {
-    fn default() -> Self {
-        Paging {
+            attachments_per_message_max: 10,
             message_page: 200,
             room_page: 200,
             users_page: 25,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(default)]
-pub struct Socket {
-    pub message_buffer: usize
-}
-
-impl Default for Socket {
-    fn default() -> Self {
-        Socket {
             message_buffer: 32
         }
     }
 }
-
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]

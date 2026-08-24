@@ -429,7 +429,7 @@ pub async fn list_discoverable_rooms(
     Query(query): Query<DirectoryQuery>,
 ) -> Result<Json<Vec<Room>>> {
 
-    let max = config::get().paging.room_page;
+    let max = config::get().limits.room_page;
     let limit = query.limit.unwrap_or(max).clamp(1, max);
 
     let rooms = api::rooms::list_discoverable(&pool, query.after, limit).await?;

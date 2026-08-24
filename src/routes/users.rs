@@ -43,7 +43,7 @@ pub async fn get_users(
     Query(query): Query<UsersQuery>,
 ) -> Result<Json<Vec<UserSummary>>> {
 
-    let max = config::get().paging.users_page;
+    let max = config::get().limits.users_page;
     let limit = query.limit.unwrap_or(max).clamp(1, max);
 
     let users = api::users::list(

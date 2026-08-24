@@ -5,6 +5,7 @@ mod db;
 mod error;
 mod models;
 mod routes;
+mod serve;
 mod utils;
 mod validate;
 
@@ -13,6 +14,7 @@ use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use uuid::Uuid;
 
 use crate::error::{AppError, Result};
@@ -28,12 +30,7 @@ async fn main() -> Result<()> {
     println!("{}", config::get().limits.file_bytes_max.to_int());
 
     // Setup tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "xenon=info,sqlx=warn".into())
-        )
-        .init();
+    init_tracing();
     tracing::info!("loaded configuration file: {config_path}");
     tracing::info!("starting server");
 
@@ -41,7 +38,7 @@ async fn main() -> Result<()> {
     ensure_files();
 
     // Set DB options and properties
-    let db_path = &config::get().storage.db_path;
+    let db_path = &config::get().storage.database;
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
@@ -63,21 +60,16 @@ async fn main() -> Result<()> {
     // Ensure owner bootstrap account is created for owner access
     ensure_owner(&pool).await?;
 
+    // Server server
     let app_state = AppState::new(pool);
     let app: axum::Router = routes::router(app_state);
-    let bind_addr = format!(
-        "{}:{}",
-        config::get().bind.ip,
-        config::get().bind.port
-    );
+    let bind_addr = config::get().socket_addr();
 
-    let listener = tokio::net::TcpListener::bind(bind_addr).await.expect("failed to bind port to listener");
-    tracing::info!("listening on {}", listener.local_addr().expect("failed to find bound address"));
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("failed serve axum application");
+    if config::get().tls_configured() {
+        serve::tls(app, bind_addr).await;
+    } else {
+        serve::plaintext(app, bind_addr).await;
+    }
 
     Ok(())
 
@@ -126,13 +118,46 @@ async fn ensure_owner(pool: &SqlitePool) -> Result<()> {
     }
 }
 
+/// Sets where tracing output is written.
+///
+/// Output goes to stdout, and is appended to `storage.log` if one is set.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new(
+                format!("xenon={},sqlx=warn", config::get().logging.level)
+            )
+        });
+
+    let path = &config::get().logging.file;
+    if path.is_empty() {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+        return;
+    }
+
+    let file = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Colour codes are written literally into a file, so they are left off
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(file.and(std::io::stdout))
+        .with_ansi(false)
+        .init();
+}
+
 /// Creates the file storage directories and verifies the temp one is writable.
 ///
 /// Exits the process if any step fails.
 fn ensure_files() {
 
     // Create or check if files folder path exists
-    let files_path = &config::get().storage.files_path;
+    let files_path = &config::get().storage.files;
     if let Err(e) = std::fs::create_dir_all(files_path) {
         eprintln!("{files_path}: {e}");
         std::process::exit(1);

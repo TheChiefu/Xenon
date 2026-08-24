@@ -189,7 +189,7 @@ pub async fn fetch(
     let mut messages: Vec<Message> = sqlx::query_as(query)
     .bind(room_id)
     .bind(anchor)
-    .bind(config::get().paging.message_page)
+    .bind(config::get().limits.message_page)
     .fetch_all(&mut *conn)
     .await?;
 
