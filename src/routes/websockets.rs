@@ -1,3 +1,5 @@
+//! The WebSocket endpoint that pushes server events to connected clients.
+
 use std::collections::hash_map::Entry;
 
 use axum::extract::ws::{Message, WebSocket};
@@ -14,6 +16,8 @@ use crate::db;
 use crate::routes::messages::MessageResponse;
 use crate::routes::{AppState, AuthUser};
 
+// Data Structs //
+
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
@@ -26,6 +30,8 @@ pub enum ServerEvent {
     RoomUpdated { room_id: Uuid },
     Resync,
 }
+
+// Socketing Methods //
 
 /// Upgrades an HTTP request into a WebSocket.
 ///
@@ -52,7 +58,7 @@ pub async fn ws_handler(
 /// * `state` - Pool and socket registry.
 /// * `room_id` - Room whose members receive the event.
 /// * `event` - What to send.
-pub async fn broadcast( 
+pub async fn broadcast(
     state: &AppState,
     room_id: Uuid,
     event: ServerEvent,
@@ -125,6 +131,8 @@ pub fn notify_users(
         }
     }
 }
+
+// Helper Methods //
 
 /// Pushes server events to one connection until it closes.
 ///

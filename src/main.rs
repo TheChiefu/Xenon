@@ -143,7 +143,7 @@ fn init_tracing() {
         }
     };
 
-    // Colour codes are written literally into a file, so they are left off
+    // Color codes are written literally into a file, so they are left off
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(file.and(std::io::stdout))
