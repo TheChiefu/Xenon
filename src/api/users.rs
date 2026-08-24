@@ -107,8 +107,8 @@ pub async fn get(
     user.ok_or(AppError::NotFound)
 }
 
-/// Writes a user's own profile, returning the stored display name when the
-/// patch included one.
+/// Writes a user's own profile, returning it as stored, or `None` if the patch
+/// asked for no change.
 ///
 /// # Arguments
 ///
@@ -124,8 +124,19 @@ pub async fn update(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
     patch: ProfilePatch,
-) -> Result<Option<String>> {
+) -> Result<Option<UserProfile>> {
 
+    // Check if any field has changed from update patch
+    let changed = patch.display_name.is_some()
+        || patch.description.is_some()
+        || patch.avatar_file_id.is_some()
+        || patch.banner_file_id.is_some();
+
+    if !changed {
+        return Ok(None);
+    }
+
+    // Validate strings
     if let Some(name) = &patch.display_name {
         validate::display_name(name)?;
     }
@@ -138,7 +149,9 @@ pub async fn update(
 
     // - COALESCE takes the sent value, or the column's own when none is sent
     // - nullif returns NULL when both arguments match, so the nil id clears
-    sqlx::query(
+    // - RETURNING hands back what the row ends up holding, which is neither the
+    //   value a patch left out nor the nil id it clears with
+    let stored: UserProfile = sqlx::query_as(
         "
         UPDATE users SET
             display_name = COALESCE(?1, display_name),
@@ -146,6 +159,8 @@ pub async fn update(
             avatar_file_id = nullif(COALESCE(?3, avatar_file_id), ?5),
             banner_file_id = nullif(COALESCE(?4, banner_file_id), ?5)
         WHERE id = ?6
+        RETURNING id, username, display_name, description, avatar_file_id,
+                  banner_file_id, global_role, created_at, deleted_at
         "
     )
     .bind(patch.display_name.as_deref())
@@ -154,10 +169,10 @@ pub async fn update(
     .bind(patch.banner_file_id)
     .bind(Uuid::nil())
     .bind(user_id)
-    .execute(&mut *conn)
+    .fetch_one(&mut *conn)
     .await?;
 
-    Ok(patch.display_name)
+    Ok(Some(stored))
 }
 
 /// Tombstones an account, stripping its credentials and profile while leaving

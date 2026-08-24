@@ -137,15 +137,20 @@ pub async fn update_me(
     Json(body): Json<ProfilePatch>,
 ) -> Result<StatusCode> {
 
-    // New display name if changed, otherwise None
-    let updated_name = api::users::update(&app_state.pool, user_id, body).await?;
+    // Profile as stored, or None if no such user
+    let updated = api::users::update(&app_state.pool, user_id, body).await?;
 
-    // Notify everyone sharing a room that the user changed their display name
-    if let Some(display_name) = updated_name {
+    // Notify everyone sharing a room of the new name and pictures
+    if let Some(profile) = updated {
         let mut conn = app_state.pool.acquire().await?;
         let members = db::shared_room_member_ids(&mut conn, user_id).await?;
 
-        let event = ServerEvent::ProfileUpdated { user_id, display_name };
+        let event = ServerEvent::ProfileUpdated {
+            user_id,
+            display_name: profile.display_name,
+            avatar_file_id: profile.avatar_file_id,
+            banner_file_id: profile.banner_file_id,
+        };
         websockets::notify_users(&app_state, &members, event);
     }
 

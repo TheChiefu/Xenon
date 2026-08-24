@@ -28,7 +28,12 @@ pub enum ServerEvent {
     Banned { room_id: Uuid },
     RoomDeleted { room_id: Uuid },
     RoomUpdated { room_id: Uuid },
-    ProfileUpdated { user_id: Uuid, display_name: String },
+    ProfileUpdated {
+        user_id: Uuid,
+        display_name: String,
+        avatar_file_id: Option<Uuid>,
+        banner_file_id: Option<Uuid>
+    },
     Resync,
 }
 
