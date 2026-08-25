@@ -13,8 +13,10 @@ use crate::api::rooms::invites::{Issued, Received};
 use crate::api::rooms::members::Entry as MemberEntry;
 use crate::error::Result;
 use crate::models::{Permission, Permissions, Room, Visibility};
-use crate::routes::websockets::ServerEvent;
-use crate::routes::{websockets, AppState, AuthUser};
+use crate::routes::AuthUser;
+use crate::sockets::events::ServerEvent;
+use crate::sockets::registry;
+use crate::state::AppState;
 use crate::{api, config};
 
 // Data Structs //
@@ -144,7 +146,7 @@ pub async fn invite_user(
     ).await?;
 
     let event = ServerEvent::Invited { room_id, invited_by: caller_id };
-    websockets::notify_user(&app_state, body.invitee, event);
+    registry::notify_user(&app_state, body.invitee, event);
 
     Ok(StatusCode::CREATED)
 }
@@ -263,7 +265,7 @@ pub async fn ban_user(
     ).await?;
 
     let event = ServerEvent::Banned { room_id };
-    websockets::notify_user(&app_state, body.target_id, event);
+    registry::notify_user(&app_state, body.target_id, event);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -306,7 +308,7 @@ pub async fn update(
 
     // Notify all room members, room has updated
     let event = ServerEvent::RoomUpdated { room_id };
-    websockets::broadcast(&app_state, room_id, event).await;
+    registry::broadcast(&app_state, room_id, event).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -360,7 +362,7 @@ pub async fn delete_room(
 
     // Notify everyone who was in the room
     let event = ServerEvent::RoomDeleted { room_id };
-    websockets::notify_users(&app_state, &members, event);
+    registry::notify_users(&app_state, &members, event);
 
     Ok(StatusCode::NO_CONTENT)
 }

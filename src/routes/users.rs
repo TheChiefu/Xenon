@@ -10,9 +10,11 @@ use uuid::Uuid;
 use crate::api::users::ProfilePatch;
 use crate::db;
 use crate::error::Result;
-use crate::models::{GlobalRole, UserProfile, UserSummary};
-use crate::routes::websockets::{self, ServerEvent};
-use crate::routes::{AppState, AuthUser};
+use crate::models::{GlobalRole, Status, UserProfile, UserSummary};
+use crate::routes::AuthUser;
+use crate::sockets::events::ServerEvent;
+use crate::sockets::{presence, registry};
+use crate::state::AppState;
 use crate::{api, config};
 
 // Data Structs //
@@ -53,6 +55,12 @@ pub struct DeleteAccountRequest {
     /// Tombstones every message the account wrote
     #[serde(default)]
     pub delete_history: bool,
+}
+
+/// PUT body for the status a user's connections start at.
+#[derive(Deserialize)]
+pub struct StatusRequest {
+    pub status: Status
 }
 
 /// Query string for a paged user listing.
@@ -152,7 +160,31 @@ pub async fn update_me(
             avatar_file_id: profile.avatar_file_id,
             banner_file_id: profile.banner_file_id,
         };
-        websockets::notify_users(&app_state, &members, event);
+        registry::notify_users(&app_state, &members, event);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Writes the status the caller's connections start at, and applies it to the
+/// ones they hold now.
+///
+/// # Arguments
+///
+/// * `user_id` - Whose status is being written.
+/// * `app_state` - Pool and socket registry.
+/// * `body` - Status to store.
+pub async fn update_my_status(
+    AuthUser(user_id, ..): AuthUser,
+    State(app_state): State<AppState>,
+    Json(body): Json<StatusRequest>,
+) -> Result<StatusCode> {
+
+    api::users::set_preferred_status(&app_state.pool, user_id, body.status).await?;
+
+    // A status comes back only when the caller holds a connection to change
+    if let Some(previous) = registry::set_status(&app_state, user_id, body.status) {
+        presence::announce_change(&app_state, user_id, Some(previous), Some(body.status)).await;
     }
 
     Ok(StatusCode::NO_CONTENT)

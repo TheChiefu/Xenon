@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::config;
 use crate::error::{self, AppError, Result};
-use crate::models::{GlobalRole, Permissions};
+use crate::models::{GlobalRole, Permissions, Status};
 use crate::utils;
 
 /// One day in milliseconds.
@@ -287,6 +287,31 @@ pub async fn room_member_ids(
     .await?;
 
     Ok(members)
+}
+
+/// Reads the status a user's connections start at.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `user_id` - User to read.
+pub async fn preferred_status(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: Uuid,
+) -> Result<Status> {
+
+    let status: Status = sqlx::query_scalar(
+        "
+        SELECT preferred_status
+        FROM users
+        WHERE id = ?1
+        "
+    )
+    .bind(user_id)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    Ok(status)
 }
 
 /// Lists the ids of everyone sharing a room with a user, the user included.

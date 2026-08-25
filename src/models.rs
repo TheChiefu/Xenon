@@ -1,14 +1,14 @@
 //! Rows as the rest of the server sees them.
+//!
+//! enums marked with "PERMANENT" is stored as its integer. Never reuse or
+//! renumber a retired variant's number once rows exist.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Roles //
 
-/// A user's server-wide role, stored as an integer.
-///
-/// !!! Permanent !!!
-/// Never reuse or renumber a retired variant's number once rows exist
+/// A user's server-wide role, stored as an integer. (PERMANENT)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(i8)]
@@ -19,10 +19,7 @@ pub enum GlobalRole {
     Visitor = 3
 }
 
-/// How a room is discovered and entered, stored as an integer.
-///
-/// !!! Permanent !!!
-/// Never reuse or renumber a retired variant's number once rows exist
+/// How a room is discovered and entered, stored as an integer. (PERMANENT)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(i8)]
@@ -35,12 +32,20 @@ pub enum Visibility {
     Hidden = 2
 }
 
+/// What a user asks to appear as while connected, stored as an integer. (PERMANENT)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[repr(i8)]
+pub enum Status {
+    Online = 0,
+    Busy = 1,
+    Away = 2,
+    Invisible = 3
+}
+
 // Permissions //
 
-/// One bit position in a [`Permissions`] mask.
-///
-/// !!! Permanent !!!
-/// Never reuse or renumber a retired variant's number once rows exist
+/// One bit position in a [`Permissions`] mask. (PERMANENT)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]

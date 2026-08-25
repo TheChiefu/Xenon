@@ -1,66 +1,25 @@
-//! The HTTP router, the shared application state, and the auth extractor.
+//! The HTTP router and the auth extractor.
 
 mod auth;
 mod files;
-mod messages;
+pub mod messages;
 mod rooms;
 mod server;
 mod users;
-mod websockets;
-
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 
 use axum::extract::{DefaultBodyLimit, FromRef, FromRequestParts};
 use axum::http;
 use axum::http::request::Parts;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use sqlx::SqlitePool;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
+use crate::sockets::connection;
+use crate::state::AppState;
 use crate::utils;
-
-// App State //
-
-/// One broadcast channel per connected user, keyed by user id.
-///
-/// Room membership stays in `room_access` and is read at broadcast time.
-///
-/// - Arc: Counted pointer, so every clone of AppState reads and writes to the same map
-/// - RwLock: (Many readers/one writer mutex) Connects and disconnects write, broadcasts read
-/// - broadcast: a single send reaches every subscriber. Sockets subscribe on connect and their
-///   subscription ends when they drop. The map keeps the channel after its
-///   last subscriber leaves.
-type Registry = Arc<RwLock<HashMap<Uuid, broadcast::Sender<String>>>>;
-
-/// Cloned per request.
-///
-/// `FromRef` generates a per-field accessor, letting handlers keep asking for
-/// `State<SqlitePool>`.
-#[derive(Clone, FromRef)]
-pub struct AppState {
-    pool: SqlitePool,
-    registry: Registry
-}
-
-impl AppState {
-
-    /// Builds the state a router is handed.
-    ///
-    /// # Arguments
-    ///
-    /// * `pool` - Pool of SQL connections.
-    pub fn new(pool: SqlitePool) -> Self {
-        AppState {
-            pool,
-            registry: Registry::default()
-        }
-    }
-}
 
 /// The authenticated caller.
 ///
@@ -121,6 +80,7 @@ pub fn router(state: AppState) -> Router {
             .delete(users::delete_me)
         )
         .route("/me/password", patch(users::update_my_password))
+        .route("/me/status", put(users::update_my_status))
         .route("/me/rooms", get(rooms::list_my_rooms))
         .route("/me/invites", get(rooms::list_my_invites))
         .route("/me/invites/{room_id}", delete(rooms::decline_invite))
@@ -176,7 +136,7 @@ pub fn router(state: AppState) -> Router {
         .route("/users/{id}/role", patch(users::set_role))
 
         // Other
-        .route("/ws", get(websockets::ws_handler))
+        .route("/ws", get(connection::ws_handler))
         .route("/server", get(server::info))
         .route("/server/version", get(server::version))
         .route("/server/type", get(server::kind))

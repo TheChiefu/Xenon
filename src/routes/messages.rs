@@ -11,8 +11,10 @@ use crate::api;
 use crate::api::messages::attachments::{Attached, Incoming};
 use crate::error::{AppError, Result};
 use crate::models::Message;
-use crate::routes::websockets::ServerEvent;
-use crate::routes::{websockets, AppState, AuthUser};
+use crate::routes::AuthUser;
+use crate::sockets::events::ServerEvent;
+use crate::sockets::registry;
+use crate::state::AppState;
 
 // Data Structs //
 
@@ -156,7 +158,7 @@ pub async fn post_message(
     // If message is posted, broadcast to all subscribed users in room
     if status == StatusCode::CREATED {
         let event = ServerEvent::Message { room_id, message: response.clone() };
-        websockets::broadcast(&app_state, room_id, event).await;
+        registry::broadcast(&app_state, room_id, event).await;
     }
 
     // Message is duplicate (no broadcast)
@@ -217,7 +219,7 @@ pub async fn delete_message(
     let room_id = api::messages::delete(&app_state.pool, message_id, caller_id).await?;
 
     let event = ServerEvent::MessageDeleted { room_id, message_id };
-    websockets::broadcast(&app_state, room_id, event).await;
+    registry::broadcast(&app_state, room_id, event).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -250,7 +252,7 @@ pub async fn update_message(
         body: request.body,
         edited_at: result.edited_at
     };
-    websockets::broadcast(&app_state, result.room_id, event).await;
+    registry::broadcast(&app_state, result.room_id, event).await;
 
     Ok(Json(EditMessageResponse { edited_at: result.edited_at }))
 }

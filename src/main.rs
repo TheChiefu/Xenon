@@ -6,6 +6,8 @@ mod error;
 mod models;
 mod routes;
 mod serve;
+mod sockets;
+mod state;
 mod utils;
 mod validate;
 
@@ -19,7 +21,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, Result};
 use crate::models::GlobalRole;
-use crate::routes::AppState;
+use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
