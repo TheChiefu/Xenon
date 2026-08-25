@@ -26,7 +26,9 @@ pub enum Presence {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientStatus {
     pub status: Status,
-    pub device: Device
+
+    /// Unset when the client named none on connect
+    pub device: Option<Device>
 }
 
 /// What a user is connected from, for a client to show beside their presence.
@@ -81,7 +83,7 @@ pub async fn snapshot(
             continue;
         }
 
-        users.push(UserPresence { user_id, presence, device: Some(client_status.device) });
+        users.push(UserPresence { user_id, presence, device: client_status.device });
     }
 
     Ok(users)

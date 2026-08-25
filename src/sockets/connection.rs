@@ -22,8 +22,10 @@ use crate::state::AppState;
 /// request is still an ordinary GET.
 #[derive(Deserialize)]
 pub struct ConnectQuery {
-    /// What the client is running on, shown beside the user's presence
-    pub device: Device
+    /// What the client is running on, shown beside the user's presence. A
+    /// client that names none still connects.
+    #[serde(default)]
+    pub device: Option<Device>
 }
 
 /// Upgrades an HTTP request into a WebSocket.
@@ -59,7 +61,7 @@ pub async fn ws_handler(
 async fn handle_socket(
     socket: WebSocket,
     user_id: Uuid,
-    device: Device,
+    device: Option<Device>,
     state: AppState,
 ) {
     // Where the connection starts, before the client declares anything
@@ -227,4 +229,5 @@ async fn read_events(
         }
     }
 }
+
 
