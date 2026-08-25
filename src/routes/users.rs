@@ -184,7 +184,7 @@ pub async fn update_my_status(
 
     // A status comes back only when the caller holds a connection to change
     if let Some(previous) = registry::set_status(&app_state, user_id, body.status) {
-        presence::announce_change(&app_state, user_id, Some(previous), Some(body.status)).await;
+        presence::on_change(&app_state, user_id, Some(previous), Some(body.status)).await;
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -239,15 +239,22 @@ pub async fn transfer_ownership(
 /// # Arguments
 ///
 /// * `user_id` - Account being closed.
-/// * `pool` - Pool of SQL connections.
+/// * `app_state` - Pool and socket registry.
 /// * `body` - Whether to anonymize the names and whether to drop the history.
 pub async fn delete_me(
     AuthUser(user_id, ..): AuthUser,
-    State(pool): State<SqlitePool>,
+    State(app_state): State<AppState>,
     Json(body): Json<DeleteAccountRequest>,
 ) -> Result<StatusCode> {
 
-    api::users::delete(&pool, user_id, body.anonymize, body.delete_history).await?;
+    let rooms = api::users::delete(
+        &app_state.pool,
+        user_id,
+        body.anonymize,
+        body.delete_history
+    ).await?;
+
+    broadcast_member_left(&app_state, user_id, rooms).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -257,19 +264,44 @@ pub async fn delete_me(
 /// # Arguments
 ///
 /// * `caller_id` - Who is closing the account.
-/// * `pool` - Pool of SQL connections.
+/// * `app_state` - Pool and socket registry.
 /// * `target_id` - Account being closed.
 /// * `body` - Whether to anonymize the names.
 pub async fn delete_user(
     AuthUser(caller_id, ..): AuthUser,
-    State(pool): State<SqlitePool>,
+    State(app_state): State<AppState>,
     Path(target_id): Path<Uuid>,
     Json(body): Json<DeleteAccountRequest>,
 ) -> Result<StatusCode> {
 
-    api::users::delete_other(&pool, caller_id, target_id, body.anonymize).await?;
+    let rooms = api::users::delete_other(
+        &app_state.pool,
+        caller_id,
+        target_id,
+        body.anonymize
+    ).await?;
+
+    broadcast_member_left(&app_state, target_id, rooms).await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Tells each of several rooms that a member is no longer in it.
+///
+/// # Arguments
+///
+/// * `app_state` - Pool and socket registry.
+/// * `user_id` - Member that was removed.
+/// * `rooms` - Rooms the membership was removed from.
+async fn broadcast_member_left(
+    app_state: &AppState,
+    user_id: Uuid,
+    rooms: Vec<Uuid>,
+) {
+    for room_id in rooms {
+        let event = ServerEvent::MemberLeft { room_id, user_id };
+        registry::broadcast(app_state, room_id, event).await;
+    }
 }
 
 /// Promotes or demotes a user.

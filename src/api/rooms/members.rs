@@ -10,7 +10,7 @@ use crate::models::{Permission, Permissions, Visibility};
 // Data Structs //
 
 /// One member of a room, with their resolved permission mask.
-#[derive(sqlx::FromRow, Serialize)]
+#[derive(sqlx::FromRow, Serialize, Clone)]
 pub struct Entry {
     pub user_id: Uuid,
     pub permissions: Permissions,

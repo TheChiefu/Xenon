@@ -2,6 +2,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use tokio::sync::broadcast;
@@ -11,7 +12,7 @@ use crate::config;
 use crate::db;
 use crate::models::Status;
 use crate::sockets::events::ServerEvent;
-use crate::sockets::presence::ClientStatus;
+use crate::sockets::presence::Device;
 use crate::state::AppState;
 
 // Data Structs //
@@ -21,9 +22,25 @@ pub struct Connected {
     /// The writing end of a channel every socket the user holds reads
     pub events: broadcast::Sender<String>,
 
-    /// What the connection that last declared won, starting at
-    /// `users.preferred_status` with no device
-    pub client_status: ClientStatus
+    /// Starts at `users.preferred_status`, then whatever the user declares
+    pub status: Status,
+
+    /// One entry per live socket that named a device, in connect order
+    pub devices: Vec<SocketDevice>
+}
+
+/// What one socket named on connect, kept until that socket closes
+pub struct SocketDevice {
+    pub socket_id: u64,
+    pub device: Device
+}
+
+/// What one user declares, before a viewer is told anything of it
+#[derive(Debug)]
+pub struct UserStatus {
+    pub user_id: Uuid,
+    pub status: Status,
+    pub device: Option<Device>
 }
 
 /// One entry per connected user, keyed by user id.
@@ -44,7 +61,15 @@ pub enum Joined {
     Additional
 }
 
+/// Handed out once per socket, so a disconnect can find the entry it added.
+static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(0);
+
 // Registry Methods //
+
+/// Takes the next socket id. A socket holds its own for as long as it is open.
+pub fn next_socket_id() -> u64 {
+    NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Returns a receiver on a user's channel, creating the entry if this is their
 /// first connection.
@@ -53,12 +78,14 @@ pub enum Joined {
 ///
 /// * `state` - Pool and socket registry.
 /// * `user_id` - User the channel belongs to.
-/// * `client_status` - What a first connection starts at. A later one joins
-///   the entry as it stands, keeping whatever the user has since declared.
+/// * `status` - What a first connection starts at. A later one joins the entry
+///   as it stands, keeping whatever the user has since declared.
+/// * `device` - What this socket named on connect, if anything.
 pub fn subscribe(
     state: &AppState,
     user_id: Uuid,
-    client_status: ClientStatus,
+    status: Status,
+    device: Option<SocketDevice>,
 ) -> (broadcast::Receiver<String>, Joined) {
     let mut reg = write_lock(state);
 
@@ -73,9 +100,13 @@ pub fn subscribe(
             joined = Joined::First;
             let buffer = config::get().limits.message_buffer;
             let (sender, _) = broadcast::channel(buffer);
-            entry.insert(Connected { events: sender, client_status })
+            entry.insert(Connected { events: sender, status, devices: Vec::new() })
         }
     };
+
+    if let Some(device) = device {
+        connected.devices.push(device);
+    }
 
     (connected.events.subscribe(), joined)
 }
@@ -87,27 +118,38 @@ pub fn subscribe(
 ///
 /// * `state` - Pool and socket registry.
 /// * `user_id` - User the channel belongs to.
+/// * `socket_id` - Identifies the entry this socket added to the device list.
 /// * `receiver` - Receiver to drop.
 pub fn unsubscribe(
     state: &AppState,
     user_id: Uuid,
+    socket_id: u64,
     receiver: broadcast::Receiver<String>,
 ) -> Option<Status> {
     drop(receiver);
 
     let mut reg = write_lock(state);
 
-    // No subscribe can run while this lock is held, the count cannot change before removal
-    let receivers = match reg.get(&user_id) {
-        Some(connected) => connected.events.receiver_count(),
+    let connected = match reg.get_mut(&user_id) {
+        Some(connected) => connected,
         None => return None,
     };
 
-    if receivers > 0 {
+    // Remove the entry this socket added, if it added one
+    for i in 0..connected.devices.len() {
+        if connected.devices[i].socket_id == socket_id {
+            connected.devices.remove(i);
+            break;
+        }
+    }
+
+    // This socket's receiver is dropped above, so the count is the write sockets left
+    if connected.events.receiver_count() > 0 {
         return None;
     }
 
-    reg.remove(&user_id).map(|connected| connected.client_status.status)
+    // Remove connection with no more sockets are left
+    reg.remove(&user_id).map(|connected| connected.status)
 }
 
 /// Reads what the given users are declaring, leaving out any holding no
@@ -120,13 +162,24 @@ pub fn unsubscribe(
 pub fn statuses_of(
     state: &AppState,
     users: &[Uuid],
-) -> Vec<(Uuid, ClientStatus)> {
+) -> Vec<UserStatus> {
     let reg = read_lock(state);
 
     let mut found = Vec::new();
     for user_id in users {
         if let Some(connected) = reg.get(user_id) {
-            found.push((*user_id, connected.client_status));
+
+            // The device most recently connected from
+            let device = match connected.devices.last() {
+                Some(last) => Some(last.device),
+                None => None
+            };
+
+            found.push(UserStatus {
+                user_id: *user_id,
+                status: connected.status,
+                device
+            });
         }
     }
 
@@ -149,8 +202,8 @@ pub fn set_status(
     let mut reg = write_lock(state);
     let connected = reg.get_mut(&user_id)?;
 
-    let previous = connected.client_status.status;
-    connected.client_status.status = status;
+    let previous = connected.status;
+    connected.status = status;
 
     Some(previous)
 }

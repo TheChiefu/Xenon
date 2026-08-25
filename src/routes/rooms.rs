@@ -15,7 +15,7 @@ use crate::error::Result;
 use crate::models::{Permission, Permissions, Room, Visibility};
 use crate::routes::AuthUser;
 use crate::sockets::events::ServerEvent;
-use crate::sockets::registry;
+use crate::sockets::{presence, registry};
 use crate::state::AppState;
 use crate::{api, config};
 
@@ -208,16 +208,20 @@ pub async fn decline_invite(
 /// # Arguments
 ///
 /// * `caller_id` - Who is withdrawing the invite.
-/// * `pool` - Pool of SQL connections.
+/// * `app_state` - Pool and socket registry.
 /// * `room_id` - Room the invite is to.
 /// * `target_id` - User the invite was addressed to.
 pub async fn revoke_invite(
     AuthUser(caller_id, ..): AuthUser,
-    State(pool): State<SqlitePool>,
+    State(app_state): State<AppState>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
 
-    api::rooms::invites::revoke(&pool, room_id, caller_id, target_id).await?;
+    api::rooms::invites::revoke(&app_state.pool, room_id, caller_id, target_id).await?;
+
+    // Notify user invite was revoked
+    let event = ServerEvent::InviteRevoked { room_id };
+    registry::notify_user(&app_state, target_id, event);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -266,6 +270,10 @@ pub async fn ban_user(
 
     let event = ServerEvent::Banned { room_id };
     registry::notify_user(&app_state, body.target_id, event);
+
+    // Ban removes the membership, notify members user left
+    let event = ServerEvent::MemberLeft { room_id, user_id: body.target_id };
+    registry::broadcast(&app_state, room_id, event).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -372,15 +380,20 @@ pub async fn delete_room(
 /// # Arguments
 ///
 /// * `user_id` - The user joining.
-/// * `pool` - Pool of SQL connections.
+/// * `app_state` - Pool and socket registry.
 /// * `room_id` - Room to join.
 pub async fn join_room(
     AuthUser(user_id, ..): AuthUser,
-    State(pool): State<SqlitePool>,
+    State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
 
-    api::rooms::join(&pool, room_id, user_id).await?;
+    api::rooms::join(&app_state.pool, room_id, user_id).await?;
+
+    let event = ServerEvent::MemberJoined { room_id, user_id };
+    registry::broadcast(&app_state, room_id, event).await;
+
+    presence::on_join(&app_state, user_id).await;
 
     Ok(StatusCode::OK)
 }
@@ -390,15 +403,19 @@ pub async fn join_room(
 /// # Arguments
 ///
 /// * `user_id` - The user leaving.
-/// * `pool` - Pool of SQL connections.
+/// * `app_state` - Pool and socket registry.
 /// * `room_id` - Room to leave.
 pub async fn leave_room(
     AuthUser(user_id, ..): AuthUser,
-    State(pool): State<SqlitePool>,
+    State(app_state): State<AppState>,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode> {
 
-    api::rooms::leave(&pool, room_id, user_id).await?;
+    api::rooms::leave(&app_state.pool, room_id, user_id).await?;
+
+    // The membership is already gone, so this reaches the remaining members
+    let event = ServerEvent::MemberLeft { room_id, user_id };
+    registry::broadcast(&app_state, room_id, event).await;
 
     Ok(StatusCode::OK)
 }

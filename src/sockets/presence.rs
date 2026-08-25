@@ -22,15 +22,6 @@ pub enum Presence {
     Away
 }
 
-/// What a client says about itself, for as long as it is connected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClientStatus {
-    pub status: Status,
-
-    /// Unset when the client named none on connect
-    pub device: Option<Device>
-}
-
 /// What a user is connected from, for a client to show beside their presence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,8 +30,7 @@ pub enum Device {
     Macos,
     Linux,
     Android,
-    Ios,
-    Web
+    Ios
 }
 
 /// Reads the status a user's connections start at.
@@ -75,15 +65,19 @@ pub async fn snapshot(
     let members = db::shared_room_member_ids(&mut conn, user_id).await?;
 
     let mut users = Vec::new();
-    for (user_id, client_status) in registry::statuses_of(state, &members) {
-        let presence = from_status(Some(client_status.status));
+    for declared in registry::statuses_of(state, &members) {
+        let presence = from_status(Some(declared.status));
 
         // An Invisible member is left out, the same as one holding no connection
         if presence == Presence::Offline {
             continue;
         }
 
-        users.push(UserPresence { user_id, presence, device: client_status.device });
+        users.push(UserPresence {
+            user_id: declared.user_id,
+            presence,
+            device: declared.device
+        });
     }
 
     Ok(users)
@@ -105,8 +99,39 @@ pub fn from_status(status: Option<Status>) -> Presence {
 
 }
 
-/// Tells everyone sharing a room with a user what to show for them, when that
-/// differs from what they were showing before.
+/// Sends the presence a join changes on both sides: the room is told the new
+/// member's presence, and the new member is sent a snapshot covering everyone
+/// now visible.
+///
+/// # Arguments
+///
+/// * `state` - Pool and socket registry.
+/// * `user_id` - User who joined.
+pub async fn on_join(
+    state: &AppState,
+    user_id: Uuid,
+) {
+    // Nothing to send for a user holding no connection
+    let declared = registry::statuses_of(state, &[user_id]);
+    let Some(entry) = declared.first() else {
+        return;
+    };
+
+    // No previous status: the room could not see the new member until now
+    on_change(state, user_id, None, Some(entry.status)).await;
+
+    // Covers everyone the new member now shares a room with
+    match snapshot(state, user_id).await {
+        Ok(users) => {
+            let event = ServerEvent::PresenceSnapshot { users };
+            registry::notify_user(state, user_id, event);
+        }
+        Err(e) => tracing::error!("could not build a presence snapshot for {user_id}: {e}")
+    }
+}
+
+/// Tells everyone sharing a room with a user what to show for that user, when
+/// it differs from what was shown before.
 ///
 /// # Arguments
 ///
@@ -114,7 +139,7 @@ pub fn from_status(status: Option<Status>) -> Presence {
 /// * `user_id` - User whose status changed.
 /// * `before` - Status they held, or `None` before they connected.
 /// * `after` - Status they hold now, or `None` once disconnected.
-pub async fn announce_change(
+pub async fn on_change(
     state: &AppState,
     user_id: Uuid,
     before: Option<Status>,
@@ -142,6 +167,13 @@ pub async fn announce_change(
         }
     };
 
-    let event = ServerEvent::PresenceUpdated { user_id, presence };
+    // Empty once they hold no connection, which is what going offline is
+    let declared = registry::statuses_of(state, &[user_id]);
+    let device = match declared.first() {
+        Some(entry) => entry.device,
+        None => None
+    };
+
+    let event = ServerEvent::PresenceUpdated { user_id, presence, device };
     registry::notify_users(state, &members, event);
 }

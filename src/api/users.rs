@@ -222,7 +222,7 @@ pub async fn delete(
     user_id: Uuid,
     anonymize: bool,
     delete_history: bool,
-) -> Result<()> {
+) -> Result<Vec<Uuid>> {
 
     let mut tx = pool.begin().await?;
 
@@ -235,13 +235,13 @@ pub async fn delete(
         tombstone_messages(&mut tx, user_id).await?;
     }
 
-    leave_every_room(&mut tx, user_id).await?;
+    let rooms = leave_every_room(&mut tx, user_id).await?;
     clear_owned_rows(&mut tx, user_id).await?;
     strip_profile(&mut tx, user_id, anonymize).await?;
 
     tx.commit().await?;
 
-    Ok(())
+    Ok(rooms)
 }
 
 /// Closes someone else's account.
@@ -265,7 +265,7 @@ pub async fn delete_other(
     caller_id: Uuid,
     target_id: Uuid,
     anonymize: bool,
-) -> Result<()> {
+) -> Result<Vec<Uuid>> {
 
     let mut conn = pool.acquire().await?;
 
@@ -441,7 +441,8 @@ async fn tombstone_messages(
 }
 
 /// Removes an account from every room it belongs to, one room at a time so each
-/// runs the same cull and promotion checks a single removal does.
+/// runs the same cull and promotion checks a single removal does, returning the
+/// rooms it was in so the caller can tell each one.
 ///
 /// # Arguments
 ///
@@ -450,7 +451,7 @@ async fn tombstone_messages(
 async fn leave_every_room(
     conn: &mut sqlx::SqliteConnection,
     user_id: Uuid,
-) -> Result<()> {
+) -> Result<Vec<Uuid>> {
 
     let rooms: Vec<Uuid> = sqlx::query_scalar(
         "SELECT room_id FROM room_access WHERE user_id = ?1"
@@ -459,11 +460,11 @@ async fn leave_every_room(
     .fetch_all(&mut *conn)
     .await?;
 
-    for room_id in rooms {
-        members::remove(&mut *conn, room_id, user_id).await?;
+    for room_id in &rooms {
+        members::remove(&mut *conn, *room_id, user_id).await?;
     }
 
-    Ok(())
+    Ok(rooms)
 }
 
 /// Deletes the rows an account owns

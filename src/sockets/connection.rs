@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::models::Status;
 use crate::routes::AuthUser;
 use crate::sockets::events::{ClientEvent, ServerEvent};
-use crate::sockets::presence::{self, ClientStatus, Device};
-use crate::sockets::registry::{self, Joined};
+use crate::sockets::presence::{self, Device};
+use crate::sockets::registry::{self, Joined, SocketDevice};
 use crate::state::AppState;
 
 // Socketing Methods //
@@ -73,15 +73,18 @@ async fn handle_socket(
         }
     };
 
-    let (mut receiver, joined) = registry::subscribe(
-        &state,
-        user_id,
-        ClientStatus { status, device }
-    );
+    // Identifies this socket's entry in the user's device list
+    let socket_id = registry::next_socket_id();
+    let device = match device {
+        Some(device) => Some(SocketDevice { socket_id, device }),
+        None => None
+    };
+
+    let (mut receiver, joined) = registry::subscribe(&state, user_id, status, device);
 
     // A later socket joins a user who was already connected
     if joined == Joined::First {
-        presence::announce_change(&state, user_id, None, Some(status)).await;
+        presence::on_change(&state, user_id, None, Some(status)).await;
     }
 
     // Tells the client to re-read over HTTP, and is sent whenever this connection falls behind its channel.
@@ -89,7 +92,7 @@ async fn handle_socket(
         Ok(payload) => payload,
         Err(e) => {
             tracing::error!("failed to serialize resync event: {e}");
-            registry::unsubscribe(&state, user_id, receiver);
+            registry::unsubscribe(&state, user_id, socket_id, receiver);
             return;
         }
     };
@@ -107,8 +110,8 @@ async fn handle_socket(
     }
 
     // A status comes back only when this was the user's last connection
-    if let Some(last) = registry::unsubscribe(&state, user_id, receiver) {
-        presence::announce_change(&state, user_id, Some(last), None).await;
+    if let Some(last) = registry::unsubscribe(&state, user_id, socket_id, receiver) {
+        presence::on_change(&state, user_id, Some(last), None).await;
     }
 }
 
@@ -223,7 +226,7 @@ async fn read_events(
         match event {
             ClientEvent::Status { status } => {
                 if let Some(previous) = registry::set_status(state, user_id, status) {
-                    presence::announce_change(state, user_id, Some(previous), Some(status)).await;
+                    presence::on_change(state, user_id, Some(previous), Some(status)).await;
                 }
             }
         }
