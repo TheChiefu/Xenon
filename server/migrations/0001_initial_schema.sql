@@ -10,7 +10,7 @@
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
     sha256      BLOB NOT NULL UNIQUE CHECK (length(sha256) = 32),
-    filename    TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255), -- File systems have a 255-byte limit on a single path components
+    filename    TEXT NOT NULL CHECK (length(filename) BETWEEN 1 AND 255), -- Served as the client's download name, where 255 is the file system limit
     mime        TEXT NOT NULL CHECK (length(mime) BETWEEN 3 AND 255),
     byte_size   INTEGER NOT NULL CHECK (byte_size > 0),
     created_at  INTEGER NOT NULL
@@ -65,8 +65,9 @@ CREATE INDEX sessions_expiry ON sessions(expires_at) WHERE revoked_at IS NULL;
 -- - 1: Locked
 -- - 2: Hidden
 --
--- default_permissions has no DEFAULT: creation must state it. 0 is a read-only
--- room, -1 grants everything.
+-- default_permissions has no DEFAULT
+-- - 0 is a read-only room
+-- - -1 grants all permissions
 CREATE TABLE rooms (
     id                  BLOB PRIMARY KEY CHECK (length(id) = 16),
     name                TEXT NOT NULL,
@@ -77,22 +78,21 @@ CREATE TABLE rooms (
     mutation_seq        INTEGER NOT NULL DEFAULT 0 CHECK (mutation_seq >= 0)
 ) STRICT;
 
--- The directory query. Partial, so Hidden rooms are absent from the index.
--- id is a UUIDv7: byte order is creation order, which the directory pages on
--- with `id > ?`.
+-- The directory query:
+-- Hidden rooms are absent from the index and id is a UUIDv7 (byte order is creation order)
+-- of which the directory pages on with `id > ?`.
 --
 -- Queries must filter with `visibility IN (0, 1)` to match this predicate.
 CREATE INDEX rooms_directory ON rooms(id) WHERE visibility IN (0, 1);
 
--- A row grants read access to the room.
---
--- permissions: NULL inherits rooms.default_permissions. -1 is every permission,
--- including ones added later.
+-- A row grants read access to the room
 --
 -- Notify:
 -- - 0: None
 -- - 1: Mentions
 -- - 2: All
+--
+-- granted_at holds join time: Public room promotes oldest member when last delete holder leaves
 CREATE TABLE room_access (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -104,7 +104,8 @@ CREATE TABLE room_access (
 
 CREATE INDEX room_access_user ON room_access(user_id);
 
--- Pending invitations to Locked and Hidden rooms. A row means invited, not joined.
+-- Pending invitations to Locked and Hidden rooms
+-- A row means invited, not joined
 CREATE TABLE room_invites (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -116,9 +117,8 @@ CREATE TABLE room_invites (
 
 CREATE INDEX room_invites_user ON room_invites(user_id);
 
--- Room-scoped bans:
--- created_by is a plain REFERENCES, never CASCADE: a cascade would lift every ban
--- its issuer made.
+-- Room scoped bans:
+-- created_by is a plain REFERENCES, never CASCADE (a cascade lifts every ban an issuer made)
 CREATE TABLE room_bans (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -153,15 +153,18 @@ CREATE INDEX messages_room ON messages(room_id, seq);
 CREATE INDEX messages_room_live ON messages(room_id, seq) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX message_nonce ON messages(author_id, client_nonce);
 
--- membership is the read rule for every room, so an author is a member by definition
 CREATE TRIGGER messages_author_is_member BEFORE INSERT ON messages
-WHEN NOT EXISTS (SELECT 1 FROM room_access a
-                  WHERE a.room_id = new.room_id AND a.user_id = new.author_id)
-BEGIN SELECT RAISE(ABORT, 'author is not a member of this room'); END;
+WHEN NOT EXISTS (
+    SELECT 1 FROM room_access a
+    WHERE a.room_id = new.room_id AND a.user_id = new.author_id
+)
+BEGIN SELECT RAISE(ABORT, 'author is not a member of this room');
+END;
 
 CREATE TRIGGER messages_author_live BEFORE INSERT ON messages
 WHEN (SELECT deleted_at FROM users WHERE id = new.author_id) IS NOT NULL
-BEGIN SELECT RAISE(ABORT, 'author is deleted'); END;
+BEGIN SELECT RAISE(ABORT, 'author is deleted');
+END;
 
 CREATE VIRTUAL TABLE messages_fts USING fts5(
     body, content = 'messages', content_rowid = 'seq', tokenize = 'trigram'
@@ -180,12 +183,11 @@ CREATE TRIGGER messages_fts_update AFTER UPDATE OF body ON messages BEGIN
     INSERT INTO messages_fts(rowid, body) VALUES (new.seq, new.body);
 END;
 
--- ordinal is the display order and half the primary key, so it also caps
--- attachments per message at 32. The config limit must stay at or below that.
+-- ordinal is the display order
 CREATE TABLE message_attachments (
     message_id  BLOB NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     file_id     BLOB NOT NULL REFERENCES files(id),
-    ordinal     INTEGER NOT NULL CHECK (ordinal >= 0 AND ordinal < 32),
+    ordinal     INTEGER NOT NULL CHECK (ordinal >= 0),
     spoiler     INTEGER NOT NULL DEFAULT 0 CHECK (spoiler IN (0, 1)),
     PRIMARY KEY (message_id, ordinal),
     UNIQUE (message_id, file_id)
@@ -193,8 +195,7 @@ CREATE TABLE message_attachments (
 
 CREATE INDEX message_attachments_file ON message_attachments(file_id);
 
--- A user's library. The row keeps a file referenced while no message attaches it,
--- so a fresh upload is never mistaken for an orphan.
+-- A user's library of files
 CREATE TABLE user_files (
     user_id   BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     file_id   BLOB NOT NULL REFERENCES files(id),
@@ -204,8 +205,7 @@ CREATE TABLE user_files (
 
 CREATE INDEX user_files_file ON user_files(file_id);
 
--- Server registration invites. Distinct from room_invites, which govern entry to
--- a room by someone who already has an account.
+-- Server registration invites
 CREATE TABLE invites (
     code        TEXT PRIMARY KEY
                 CHECK (code NOT GLOB '*[^A-Z0-9]*' AND length(code) BETWEEN 12 AND 64),
@@ -218,14 +218,14 @@ CREATE TABLE invites (
     CHECK (max_uses IS NULL OR uses <= max_uses)
 ) STRICT;
 
--- The VAPID public key browsers subscribe against.
+-- The VAPID public key browsers subscribe against
 CREATE TABLE push_keys (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
     public_key  BLOB NOT NULL CHECK (length(public_key) = 65),
     created_at  INTEGER NOT NULL
 ) STRICT;
 
--- One row per browser subscribed to Web Push.
+-- One row per browser subscribed to Web Push
 CREATE TABLE push_subscriptions (
     endpoint    TEXT NOT NULL PRIMARY KEY CHECK (length(endpoint) BETWEEN 1 AND 2048),
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,

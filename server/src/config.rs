@@ -159,12 +159,6 @@ impl Config {
             return Err("limits.file_bytes_max must be at least 1 byte".to_string());
         }
 
-        // 32 is the ordinal CHECK in the schema, a larger value fails on insert
-        let attachments = self.limits.attachments_per_message_max;
-        if attachments < 1 || attachments > 32 {
-            return Err("limits.attachments_per_message_max must be between 1 and 32".to_string());
-        }
-
         if self.limits.message_page < 1 {
             return Err("limits.message_page must be at least 1".to_string());
         }
