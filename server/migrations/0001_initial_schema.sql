@@ -65,14 +65,13 @@ CREATE INDEX sessions_expiry ON sessions(expires_at) WHERE revoked_at IS NULL;
 -- - 1: Locked
 -- - 2: Hidden
 --
--- default_permissions has no DEFAULT
--- - 0 is a read-only room
--- - -1 grants all permissions
+-- default_permissions has no DEFAULT: creation must state it. 0 is a read-only
+-- room, and the value is copied into room_access.permissions when a member joins.
 CREATE TABLE rooms (
     id                  BLOB PRIMARY KEY CHECK (length(id) = 16),
     name                TEXT NOT NULL,
     visibility          INTEGER NOT NULL CHECK (visibility IN (0, 1, 2)),
-    default_permissions INTEGER NOT NULL CHECK (default_permissions >= -1),
+    default_permissions INTEGER NOT NULL CHECK (default_permissions >= 0),
     created_at          INTEGER NOT NULL,
     -- Incremented on edit and tombstone
     mutation_seq        INTEGER NOT NULL DEFAULT 0 CHECK (mutation_seq >= 0)
@@ -92,11 +91,11 @@ CREATE INDEX rooms_directory ON rooms(id) WHERE visibility IN (0, 1);
 -- - 1: Mentions
 -- - 2: All
 --
--- granted_at holds join time: Public room promotes oldest member when last delete holder leaves
+-- granted_at holds join time, and orders the member list
 CREATE TABLE room_access (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    permissions INTEGER CHECK (permissions IS NULL OR permissions >= -1),
+    permissions INTEGER NOT NULL CHECK (permissions >= 0),
     notify      INTEGER NOT NULL DEFAULT 0 CHECK (notify IN (0, 1, 2)),
     granted_at  INTEGER NOT NULL,
     PRIMARY KEY (room_id, user_id)

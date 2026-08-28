@@ -80,7 +80,7 @@ pub async fn register(
         username,
         display_name,
         &password_hash,
-        GlobalRole::Member
+        GlobalRole::Visitor
     ).await?;
 
     // Create session key

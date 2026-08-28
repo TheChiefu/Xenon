@@ -32,6 +32,15 @@ pub enum Visibility {
     Hidden = 2
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[repr(i8)]
+pub enum Notify {
+    None = 0,
+    Mentions = 1,
+    All = 2,
+}
+
 /// What a user asks to appear as while connected, stored as an integer. (PERMANENT)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,36 +59,44 @@ pub enum Status {
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum Permission {
-    /// Send messages.
+    /// Send messages
     Post = 0,
-    /// Attach files to a message.
+    /// Attach files to a message
     Attach = 1,
-    /// Delete other users' messages.
-    DeleteMsg = 2,
-    /// Delete the room.
-    DeleteRoom = 3,
-    /// Create invites to the room.
+    /// Use slash commands (unimplemented)
+    Commands = 2,
+    /// Delete other users' messages
+    DeleteMsg = 3,
+    /// Create invites to the room
     Invite = 4,
-    /// Set other users' permissions.
-    Manage = 5,
-    /// Edit the room name.
-    Rename = 6,
-    /// Remove a user from the room, with or without an expiry.
-    Ban = 7,
-    /// Use slash commands (unimplemented).
-    Commands = 8,
-    /// Join voice chat (unimplemented).
+    /// Edit the room name and visibility
+    Rename = 5,
+    /// Remove a user from the room, with or without an expiry
+    Ban = 6,
+    /// Set other users' permissions, bounded by your own
+    Grant = 7,
+    /// Delete the room
+    DeleteRoom = 8,
+    /// Join voice chat (unimplemented)
     Connect = 9,
-    /// Speak in voice chat (unimplemented).
+    /// Speak in voice chat (unimplemented)
     Speak = 10,
-    /// Mute others in voice chat (unimplemented).
+    /// Mute others in voice chat (unimplemented)
     Mute = 11,
-    /// Show webcam video (unimplemented).
+    /// Show webcam video (unimplemented)
     Video = 12,
-    /// Share screen (unimplemented).
+    /// Share screen (unimplemented)
     Screenshare = 13,
 }
-const _: () = assert!((Permission::Screenshare as u8) < 63);
+
+impl Permission {
+    /// Reports whether the permission is aimed at a member, and so cannot be
+    /// used against someone who also holds it
+    #[must_use]
+    pub const fn member_directed(self) -> bool {
+        matches!(self, Self::Ban | Self::Grant | Self::Mute)
+    }
+}
 
 /// A set of [`Permission`] bits, stored as an integer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
@@ -89,7 +106,23 @@ pub struct Permissions(i64);
 
 impl Permissions {
     pub const NONE: Self = Self(0);
-    pub const ALL: Self = Self(-1);
+
+    /// Every permission - Add new ones here
+    pub const FULL: Self = Self::NONE
+        .grant(Permission::Post)
+        .grant(Permission::Attach)
+        .grant(Permission::Commands)
+        .grant(Permission::DeleteMsg)
+        .grant(Permission::Invite)
+        .grant(Permission::Rename)
+        .grant(Permission::Ban)
+        .grant(Permission::Grant)
+        .grant(Permission::DeleteRoom)
+        .grant(Permission::Connect)
+        .grant(Permission::Speak)
+        .grant(Permission::Mute)
+        .grant(Permission::Video)
+        .grant(Permission::Screenshare);
 
     /// Reports whether the mask holds the given permission.
     ///
@@ -109,7 +142,7 @@ impl Permissions {
     ///
     /// * `p` - Permission to add.
     #[must_use]
-    pub fn grant(self, p: Permission) -> Self {
+    pub const fn grant(self, p: Permission) -> Self {
         let perm = p as u8;
         let bit = 1i64 << perm;
         Self(self.0 | bit) // Turn 'perm' bit ON

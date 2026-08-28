@@ -66,7 +66,8 @@ pub async fn exists(
 ///
 /// # Errors
 ///
-/// Returns `AppError::Forbidden` if the caller lacks `Permission::Ban`.
+/// Returns `AppError::Forbidden` unless the caller holds `Permission::Ban`, or
+/// is server staff in a Public room.
 pub async fn list(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
@@ -111,7 +112,8 @@ pub async fn list(
 ///
 /// # Errors
 ///
-/// Returns `AppError::Forbidden` if the caller lacks `Permission::Ban`.
+/// Returns `AppError::Forbidden` unless the caller holds `Permission::Ban`, or
+/// is server staff in a Public room.
 pub async fn create(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
@@ -124,6 +126,17 @@ pub async fn create(
     let mut tx = pool.begin().await?;
 
     require_permission(&mut tx, room_id, caller_id).await?;
+
+    // Caller tries to ban themselves
+    if caller_id == target_id {
+        return Err(AppError::Validation("cannot ban yourself".to_string()));
+    }
+
+    // Ban cannot be used against another holder
+    let target = db::effective_permissions(&mut tx, room_id, target_id).await?;
+    if target.is_some_and(|p| p.has(Permission::Ban)) {
+        return Err(AppError::Forbidden);
+    }
 
     // Ban target user
     let now = utils::now_ms();
@@ -150,7 +163,7 @@ pub async fn create(
 
     // Remove the target's membership. A user who is not in the room can still
     // be banned, so NotFound is discarded and every other error is returned
-    match rooms::members::remove(&mut tx, room_id, target_id).await {
+    match rooms::access::remove(&mut tx, room_id, target_id).await {
         Err(AppError::NotFound) => (),
         Err(err) => return Err(err),
         Ok(()) => ()
@@ -172,8 +185,9 @@ pub async fn create(
 ///
 /// # Errors
 ///
-/// Returns `AppError::Forbidden` if the caller lacks `Permission::Ban`, and
-/// `AppError::NotFound` if the user holds no ban on the room.
+/// Returns `AppError::Forbidden` unless the caller holds `Permission::Ban` or is
+/// server staff in a Public room, and `AppError::NotFound` if the user holds no
+/// ban on the room.
 pub async fn revoke(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
@@ -212,7 +226,8 @@ pub async fn revoke(
 ///
 /// # Errors
 ///
-/// Returns `AppError::Forbidden` if the caller lacks `Permission::Ban`.
+/// Returns `AppError::Forbidden` unless the caller holds `Permission::Ban`, or
+/// is server staff in a Public room.
 async fn require_permission(
     conn: &mut sqlx::SqliteConnection,
     room_id: Uuid,
@@ -220,7 +235,10 @@ async fn require_permission(
 ) -> Result<()> {
 
     let perms = db::effective_permissions(&mut *conn, room_id, caller_id).await?;
-    if !perms.is_some_and(|p| p.has(Permission::Ban)) {
+    let permitted = perms.is_some_and(|p| p.has(Permission::Ban));
+    let staff = db::staff_over_room(&mut *conn, room_id, caller_id).await?;
+
+    if !(permitted || staff) {
         return Err(AppError::Forbidden);
     }
 

@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::api::rooms::RoomPatch;
 use crate::api::rooms::bans::Entry as BanEntry;
 use crate::api::rooms::invites::{Issued, Received};
-use crate::api::rooms::members::Entry as MemberEntry;
-use crate::error::Result;
+use crate::api::rooms::access::{Entry as RoomAccessEntry, RoomAccessPatch};
+use crate::error::{AppError, Result};
 use crate::models::{Permission, Permissions, Room, Visibility};
 use crate::routes::AuthUser;
 use crate::sockets::events::ServerEvent;
@@ -90,31 +90,46 @@ pub async fn list_members(
     AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path(room_id): Path<Uuid>,
-) -> Result<Json<Vec<MemberEntry>>> {
+) -> Result<Json<Vec<RoomAccessEntry>>> {
 
-    let members = api::rooms::members::list(&pool, room_id, caller_id).await?;
+    let members = api::rooms::access::list(&pool, room_id, caller_id).await?;
 
     Ok(Json(members))
 }
 
-/// Sets a user's permissions in a room.
+/// Writes a member's row in a room.
 ///
 /// # Arguments
 ///
-/// * `caller_id` - Who is setting the permissions.
+/// * `caller_id` - Who is making the change.
 /// * `pool` - Pool of SQL connections.
-/// * `room_id` - Room the permissions apply to.
-/// * `target_id` - Whose permissions are being set.
-/// * `body` - Permissions the target receives.
-pub async fn set_permissions(
+/// * `room_id` - Room the row belongs to.
+/// * `target_id` - Whose row is being written.
+/// * `body` - Fields to write.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if `notify` names anyone but the caller.
+pub async fn patch(
     AuthUser(caller_id, ..): AuthUser,
     State(pool): State<SqlitePool>,
     Path((room_id, target_id)): Path<(Uuid, Uuid)>,
-    Json(body): Json<Vec<Permission>>,
+    Json(body): Json<RoomAccessPatch>,
 ) -> Result<StatusCode> {
 
-    let perms = Permissions::from_list(&body);
-    api::rooms::members::set_permissions(&pool, room_id, caller_id, target_id, perms).await?;
+    if let Some(permissions) = body.permissions {
+        let perms = Permissions::from_list(&permissions);
+        api::rooms::access::update(&pool, room_id, caller_id, target_id, perms).await?;
+    }
+
+    // Set caller's notification preference
+    if let Some(notify) = body.notify {
+        if caller_id != target_id {
+            return Err(AppError::Forbidden);
+        }
+
+        api::rooms::access::set_notify(&pool, room_id, caller_id, notify).await?;
+    }
 
     Ok(StatusCode::OK)
 }
@@ -146,7 +161,7 @@ pub async fn invite_user(
     ).await?;
 
     let event = ServerEvent::Invited { room_id, invited_by: caller_id };
-    registry::notify_user(&app_state, body.invitee, event);
+    registry::inform_user(&app_state, body.invitee, event);
 
     Ok(StatusCode::CREATED)
 }
@@ -221,7 +236,7 @@ pub async fn revoke_invite(
 
     // Notify user invite was revoked
     let event = ServerEvent::InviteRevoked { room_id };
-    registry::notify_user(&app_state, target_id, event);
+    registry::inform_user(&app_state, target_id, event);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -269,7 +284,7 @@ pub async fn ban_user(
     ).await?;
 
     let event = ServerEvent::Banned { room_id };
-    registry::notify_user(&app_state, body.target_id, event);
+    registry::inform_user(&app_state, body.target_id, event);
 
     // Ban removes the membership, notify members user left
     let event = ServerEvent::MemberLeft { room_id, user_id: body.target_id };
@@ -336,9 +351,12 @@ pub async fn create_room(
 
     let default_permissions = Permissions::from_list(&body.default_permissions);
 
-    // Check if creator wants to inherit default permissions
-    // or have full access to room (Some - Full / None - Inherit)
-    let caller_permissions = body.claim_all.then_some(Permissions::ALL);
+    // The creator takes the full mask, or the template everyone else joins on
+    let caller_permissions = if body.claim_all {
+        Permissions::FULL
+    } else {
+        default_permissions
+    };
 
     // Attempt to create room
     let id = api::rooms::create(
@@ -370,7 +388,7 @@ pub async fn delete_room(
 
     // Notify everyone who was in the room
     let event = ServerEvent::RoomDeleted { room_id };
-    registry::notify_users(&app_state, &members, event);
+    registry::inform_users(&app_state, &members, event);
 
     Ok(StatusCode::NO_CONTENT)
 }

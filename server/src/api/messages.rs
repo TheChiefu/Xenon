@@ -229,8 +229,8 @@ pub async fn fetch(
 /// # Errors
 ///
 /// Returns `AppError::NotFound` if no such message exists, and
-/// `AppError::Forbidden` if the caller is neither the author nor a holder of
-/// `Permission::DeleteMsg`.
+/// `AppError::Forbidden` unless the caller is the author, holds
+/// `Permission::DeleteMsg`, or is server staff in a Public room.
 pub async fn delete(
     pool: &sqlx::SqlitePool,
     message_id: Uuid,
@@ -243,7 +243,10 @@ pub async fn delete(
 
     // If caller has permission to delete
     let perms = db::effective_permissions(&mut tx, room_id, caller_id).await?;
-    if !can_delete(perms, caller_id, message.author_id) {
+    let permitted = can_delete(perms, caller_id, message.author_id);
+    let staff = db::staff_over_room(&mut tx, room_id, caller_id).await?;
+
+    if !(permitted || staff) {
         return Err(AppError::Forbidden);
     }
 

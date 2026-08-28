@@ -107,7 +107,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/rooms/{id}/invites/{user_id}", delete(rooms::revoke_invite))
         .route("/rooms/{id}/members", get(rooms::list_members))
-        .route("/rooms/{id}/members/{user_id}", patch(rooms::set_permissions))
+        .route("/rooms/{id}/members/{user_id}", patch(rooms::patch))
         .route("/rooms/{id}/bans",
             get(rooms::list_bans)
             .post(rooms::ban_user)

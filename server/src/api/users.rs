@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api::rooms::members;
+use crate::api::rooms::access;
 use crate::db;
 use crate::error::{AppError, Result};
 use crate::models::{GlobalRole, Status, UserProfile, UserSummary};
@@ -461,7 +461,7 @@ async fn leave_every_room(
     .await?;
 
     for room_id in &rooms {
-        members::remove(&mut *conn, *room_id, user_id).await?;
+        access::remove(&mut *conn, *room_id, user_id).await?;
     }
 
     Ok(rooms)

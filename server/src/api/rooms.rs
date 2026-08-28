@@ -2,7 +2,7 @@
 
 pub mod bans;
 pub mod invites;
-pub mod members;
+pub mod access;
 
 use serde::Deserialize;
 use uuid::Uuid;
@@ -84,8 +84,8 @@ pub async fn update(
 
     validate::room_name(name)?;
 
-    // Check if performing managing actions
-    let managing = patch.visibility.is_some() || patch.default_permissions.is_some();
+    let revealing = patch.visibility.is_some();
+    let granting = patch.default_permissions.is_some();
     let default_permissions = patch.default_permissions.as_deref().map(Permissions::from_list);
 
     let mut tx = pool.begin().await?;
@@ -95,10 +95,10 @@ pub async fn update(
     let perms = perms.ok_or(AppError::Forbidden)?;
 
     // Check permissions for requested actions
-    if renaming && !perms.has(Permission::Rename) {
+    if (renaming || revealing) && !perms.has(Permission::Rename) {
         return Err(AppError::Forbidden);
     }
-    if managing && !perms.has(Permission::Manage) {
+    if granting && !perms.has(Permission::Grant) {
         return Err(AppError::Forbidden);
     }
 
@@ -134,34 +134,22 @@ pub async fn update(
 /// * `pool` - Pool of SQL connections.
 /// * `caller_id` - User creating the room.
 /// * `name` - Room name. (NULL/None not allowed)
-/// * `caller_permissions` - Mask the creator takes, or `None` to inherit the
-///   room defaults.
+/// * `caller_permissions` - Mask the creator takes.
 /// * `default_permissions` - Mask a user takes on joining the room.
 /// * `visibility` - Whether the room is discoverable and self-service.
 ///
 /// # Errors
 ///
-/// Returns `AppError::Validation` if a Public room's creator could not delete
-/// it or the name is over the length limit, and `AppError::Forbidden` if the
-/// caller's global role cannot create rooms.
+/// Returns `AppError::Validation` if the name is over the length limit, and
+/// `AppError::Forbidden` if the caller's global role cannot create rooms.
 pub async fn create(
     pool: &sqlx::SqlitePool,
     caller_id: Uuid,
     name: &str,
-    caller_permissions: Option<Permissions>,
+    caller_permissions: Permissions,
     default_permissions: Permissions,
     visibility: Visibility,
 ) -> Result<Uuid> {
-
-    // Public rooms need someone who can delete them, they never empty out on their own
-    let requires_delete_room = [Visibility::Public];
-    if requires_delete_room.contains(&visibility)
-        && !caller_permissions.unwrap_or(default_permissions).has(Permission::DeleteRoom)
-    {
-        return Err(AppError::Validation(
-            "a public room's creator must be able to delete it".to_string(),
-        ));
-    }
 
     // A name of nothing but spaces is stored as the empty name
     let mut clean_room_name = name;
@@ -228,8 +216,8 @@ pub async fn create(
 ///
 /// # Errors
 ///
-/// Returns `AppError::Forbidden` if the caller is not a member of the room or
-/// holds no `Permission::DeleteRoom`. A room that does not exist is also
+/// Returns `AppError::Forbidden` unless the caller holds `Permission::DeleteRoom`
+/// or is server staff in a Public room. A room that does not exist is also
 /// `Forbidden`, since a non-member cannot tell the two cases apart.
 pub async fn delete(
     pool: &sqlx::SqlitePool,
@@ -241,7 +229,10 @@ pub async fn delete(
 
     // Deleting a room requires Permission::DeleteRoom
     let perms = db::effective_permissions(&mut tx, room_id, caller_id).await?;
-    if !perms.is_some_and(|p| p.has(Permission::DeleteRoom)) {
+    let permitted = perms.is_some_and(|p| p.has(Permission::DeleteRoom));
+    let staff = db::staff_over_room(&mut tx, room_id, caller_id).await?;
+
+    if !(permitted || staff) {
         return Err(AppError::Forbidden);
     }
 
@@ -315,13 +306,14 @@ pub async fn join(
     sqlx::query(
         "
         INSERT INTO room_access (room_id, user_id, permissions, granted_at)
-        VALUES (?1, ?2, ?3, ?4)
+        SELECT ?1, ?2, r.default_permissions, ?3
+        FROM rooms r
+        WHERE r.id = ?1
         ON CONFLICT DO NOTHING
         "
     )
     .bind(room_id)
     .bind(user_id)
-    .bind(None::<Permissions>) // NULL, inherit the room default
     .bind(now)
     .execute(&mut *tx)
     .await?;
@@ -353,7 +345,7 @@ pub async fn leave(
 ) -> Result<()> {
 
     let mut tx = pool.begin().await?;
-    members::remove(&mut tx, room_id, user_id).await?;
+    access::remove(&mut tx, room_id, user_id).await?;
     tx.commit().await?;
 
     Ok(())

@@ -238,7 +238,7 @@ pub async fn broadcast(
         }
     };
 
-    notify_users(state, &members, event);
+    inform_users(state, &members, event);
 }
 
 /// Sends an event to one user.
@@ -248,12 +248,12 @@ pub async fn broadcast(
 /// * `state` - Pool and socket registry.
 /// * `user_id` - User who receives the event.
 /// * `event` - What to send.
-pub fn notify_user(
+pub fn inform_user(
     state: &AppState,
     user_id: Uuid,
     event: ServerEvent,
 ) {
-    notify_users(state, &[user_id], event);
+    inform_users(state, &[user_id], event);
 }
 
 /// Sends an event to a list of users.
@@ -263,7 +263,7 @@ pub fn notify_user(
 /// * `state` - Pool and socket registry.
 /// * `users` - Users who receive the event.
 /// * `event` - What to send.
-pub fn notify_users(
+pub fn inform_users(
     state: &AppState,
     users: &[Uuid],
     event: ServerEvent,

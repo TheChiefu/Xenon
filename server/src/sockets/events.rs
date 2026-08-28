@@ -28,18 +28,52 @@ pub struct UserPresence {
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
-    Message { room_id: Uuid, message: MessageResponse },
-    MessageDeleted { room_id: Uuid, message_id: Uuid },
-    MessageEdited { room_id: Uuid, message_id: Uuid, body: Option<String>, edited_at: i64 },
-    Invited { room_id: Uuid, invited_by: Uuid },
-    InviteRevoked { room_id: Uuid },
-    Banned { room_id: Uuid },
-    MemberJoined { room_id: Uuid, user_id: Uuid },
-    MemberLeft { room_id: Uuid, user_id: Uuid },
-    RoomDeleted { room_id: Uuid },
-    RoomUpdated { room_id: Uuid },
-    PresenceUpdated { user_id: Uuid, presence: Presence, device: Option<Device> },
-    PresenceSnapshot { users: Vec<UserPresence> },
+    Message {
+        room_id: Uuid,
+        message: MessageResponse
+    },
+    MessageDeleted {
+        room_id: Uuid,
+        message_id: Uuid
+    },
+    MessageEdited {
+        room_id: Uuid,
+        message_id: Uuid,
+        body: Option<String>,
+        edited_at: i64 
+    },
+    Invited {
+        room_id: Uuid,
+        invited_by: Uuid
+    },
+    InviteRevoked {
+        room_id: Uuid
+    },
+    Banned {
+        room_id: Uuid
+    },
+    MemberJoined {
+        room_id: Uuid,
+        user_id: Uuid
+    },
+    MemberLeft {
+        room_id: Uuid,
+        user_id: Uuid
+    },
+    RoomDeleted {
+        room_id: Uuid
+    },
+    RoomUpdated {
+        room_id: Uuid
+    },
+    PresenceUpdated {
+        user_id: Uuid,
+        presence: Presence,
+        device: Option<Device>
+    },
+    PresenceSnapshot {
+        users: Vec<UserPresence>
+    },
     ProfileUpdated {
         user_id: Uuid,
         display_name: String,
@@ -48,4 +82,17 @@ pub enum ServerEvent {
         banner_file_id: Option<Uuid>
     },
     Resync,
+    Notification {
+        room_id: Uuid,
+        room_name: String,
+        author: String,
+        body: String
+    },
+    Push {
+        room_id: Uuid,
+        room_name: String,
+        author: Uuid,
+        body: Uuid,
+        renotify: bool
+    }
 }

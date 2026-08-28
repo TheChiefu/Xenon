@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::config;
 use crate::error::{self, AppError, Result};
-use crate::models::{GlobalRole, Permissions, Status};
+use crate::models::{GlobalRole, Permissions, Status, Visibility};
 use crate::utils;
 
 /// One day in milliseconds.
@@ -194,8 +194,8 @@ pub async fn effective_permissions(
 
     let result: Option<Permissions> = sqlx::query_scalar(
         "
-        SELECT COALESCE(a.permissions, r.default_permissions)
-        FROM room_access a JOIN rooms r ON r.id = a.room_id
+        SELECT a.permissions
+        FROM room_access a
         WHERE a.room_id = ?1 AND a.user_id = ?2
         "
     )
@@ -262,6 +262,37 @@ pub async fn require_role(
     }
 
     Ok(())
+}
+
+/// Reports whether a user may act on a room as server staff: Owner and Admin,
+/// in Public rooms alone.
+///
+/// # Arguments
+///
+/// * `conn` - Connection to SQL DB.
+/// * `room_id` - Room being acted on.
+/// * `user_id` - User attempting the action.
+pub async fn staff_over_room(
+    conn: &mut sqlx::SqliteConnection,
+    room_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool> {
+
+    let allowed = [GlobalRole::Owner, GlobalRole::Admin];
+    let role = global_role(&mut *conn, user_id).await?;
+    if !allowed.contains(&role) {
+        return Ok(false);
+    }
+
+    let public: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?1 AND visibility = ?2)"
+    )
+    .bind(room_id)
+    .bind(Visibility::Public)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    Ok(public)
 }
 
 /// Lists the ids of every member of a room.

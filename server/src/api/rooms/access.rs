@@ -1,11 +1,11 @@
 //! The `room_access` table: who belongs to a room, and what they may do in it.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{Permission, Permissions, Visibility};
+use crate::models::{Notify, Permission, Permissions};
 
 // Data Structs //
 
@@ -14,7 +14,23 @@ use crate::models::{Permission, Permissions, Visibility};
 pub struct Entry {
     pub user_id: Uuid,
     pub permissions: Permissions,
-    pub granted_at: i64
+    pub granted_at: i64,
+    /// Present on a caller's own row, members never sees another's
+    pub notify: Option<Notify>
+}
+
+/// PATCH body for a room_access row
+#[derive(Deserialize)]
+pub struct RoomAccessPatch {
+    pub permissions: Option<Vec<Permission>>,
+    pub notify: Option<Notify>
+}
+
+/// Pairing of a user and their room notification preference
+#[derive(sqlx::FromRow)]
+pub struct NotifyUserPair {
+    pub user_id: Uuid,
+    pub notify: Notify,
 }
 
 // API Methods //
@@ -54,13 +70,15 @@ pub async fn list(
     // Get resulting vector of room members
     let result: Vec<Entry> = sqlx::query_as(
         "
-        SELECT a.user_id, COALESCE(a.permissions, r.default_permissions) AS permissions, a.granted_at
-        FROM room_access a JOIN rooms r ON r.id = a.room_id
+        SELECT a.user_id, a.permissions, a.granted_at,
+            CASE WHEN a.user_id = ?2 THEN a.notify END AS notify
+        FROM room_access a
         WHERE a.room_id = ?1
         ORDER BY a.granted_at, a.user_id
         "
     )
     .bind(room_id)
+    .bind(caller_id)
     .fetch_all(&mut *conn)
     .await?;
 
@@ -79,10 +97,10 @@ pub async fn list(
 ///
 /// # Errors
 ///
-/// Returns `AppError::Forbidden` if the caller lacks `Permission::Manage`,
+/// Returns `AppError::Forbidden` if the caller lacks `Permission::Grant`,
 /// `AppError::Validation` if the caller grants themselves a permission they do
 /// not hold, and `AppError::NotFound` if the target is not in the room.
-pub async fn set_permissions(
+pub async fn update(
     pool: &sqlx::SqlitePool,
     room_id: Uuid,
     caller_id: Uuid,
@@ -90,22 +108,35 @@ pub async fn set_permissions(
     permissions: Permissions,
 ) -> Result<()> {
 
-    let mut conn = pool.acquire().await?;
+    // One transaction, so the permissions read here cannot change before the write
+    let mut tx = pool.begin().await?;
 
     // Check caller's permission in the room
-    let perms = db::effective_permissions(&mut conn, room_id, caller_id).await?;
+    let perms = db::effective_permissions(&mut tx, room_id, caller_id).await?;
     let Some(perms) = perms else {
         return Err(AppError::Forbidden);
     };
 
-    if !perms.has(Permission::Manage) {
+    if !perms.has(Permission::Grant) {
         return Err(AppError::Forbidden);
     }
 
-    // A caller editing their own row cannot add a permission they do not hold
-    if caller_id == target_id && !perms.contains(permissions) {
-        let err = "cannot grant yourself permissions you do not hold".to_string();
+    // A grant is bounded by the caller's own mask
+    if !perms.contains(permissions) {
+        let err = "cannot grant permissions you do not hold".to_string();
         return Err(AppError::Validation(err));
+    }
+
+    // Grant cannot be used against another holder. Your own row is exempt
+    if caller_id != target_id {
+        let target = db::effective_permissions(&mut tx, room_id, target_id).await?;
+        let Some(target) = target else {
+            return Err(AppError::NotFound);
+        };
+
+        if target.has(Permission::Grant) {
+            return Err(AppError::Forbidden);
+        }
     }
 
     // Change target's permissions to new mask
@@ -119,7 +150,7 @@ pub async fn set_permissions(
     .bind(permissions)
     .bind(room_id)
     .bind(target_id)
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
 
     // No row affected means the target is not in the room
@@ -127,10 +158,53 @@ pub async fn set_permissions(
         return Err(AppError::NotFound);
     }
 
+    tx.commit().await?;
+
     Ok(())
 }
 
-/// Removes one member from one room, culling or promoting as needed.
+/// Sets how much of a room the caller is told about.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `room_id` - Room the preference applies to.
+/// * `caller_id` - Whose membership is written.
+/// * `notify` - New level to store.
+///
+/// # Errors
+///
+/// Returns `AppError::NotFound` if the caller is not in the room.
+pub async fn set_notify(
+    pool: &sqlx::SqlitePool,
+    room_id: Uuid,
+    caller_id: Uuid,
+    notify: Notify,
+) -> Result<()> {
+
+    let mut conn = pool.acquire().await?;
+
+    let affected = sqlx::query(
+        "
+        UPDATE room_access
+        SET notify = ?1
+        WHERE room_id = ?2 AND user_id = ?3
+        "
+    )
+    .bind(notify)
+    .bind(room_id)
+    .bind(caller_id)
+    .execute(&mut *conn)
+    .await?;
+
+    if affected.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(())
+}
+
+/// Removes one member from one room, culling it if they were the last.
 ///
 /// The single lifecycle path: voluntary leave, removal, and account deletion
 /// all land here. Takes a connection rather than a pool so the caller owns the
@@ -196,59 +270,33 @@ pub async fn remove(
         return Ok(());
     }
 
-    // Members remain, check if room is public.
-    // Public: No one can delete it so promote oldest user to have deletion privileges
-    // Private/Locked: Do no promotion
-    let members: Vec<(Uuid, Permissions)> = sqlx::query_as(
-        "
-        SELECT a.user_id, COALESCE(a.permissions, r.default_permissions)
-        FROM room_access a JOIN rooms r ON r.id = a.room_id
-        WHERE a.room_id = ?1 AND r.visibility = ?2
-        ORDER BY a.granted_at, a.user_id
-        "
-    )
-    .bind(room_id)
-    .bind(Visibility::Public)
-    .fetch_all(&mut *conn)
-    .await?;
-
-    // Empty on Locked and Hidden rooms, which the query filters out
-    let Some(promoted) = pick_promotion(&members) else {
-        return Ok(());
-    };
-
-    sqlx::query(
-        "
-        UPDATE room_access
-        SET permissions = ?1
-        WHERE room_id = ?2 AND user_id = ?3
-        "
-    )
-    .bind(Permissions::ALL)
-    .bind(room_id)
-    .bind(promoted)
-    .execute(&mut *conn)
-    .await?;
-
     Ok(())
 }
 
-// Helper Methods //
-
-/// Picks who inherits a Public room that just lost its last `DeleteRoom` holder.
-///
+/// List the notify and user ID pair in a given room
+/// 
 /// # Arguments
 ///
-/// * `members` - Remaining members, ordered oldest membership first.
-fn pick_promotion(members: &[(Uuid, Permissions)]) -> Option<Uuid> {
+/// * `conn` - An SQL connections
+/// * `room_id` - Room to look in
+/// * `caller_id` - Who is requesting the list
+pub async fn list_notify_pairs(
+    conn: &mut sqlx::SqliteConnection,
+    room_id: Uuid,
+) -> Result<Vec<NotifyUserPair>> {
 
-    // Someone can still delete the room, leave it alone
-    for (_, perms) in members {
-        if perms.has(Permission::DeleteRoom) {
-            return None;
-        }
-    }
+    // Get resulting vector of room members
+    let result: Vec<NotifyUserPair> = sqlx::query_as(
+        "
+        SELECT user_id, notify
+        FROM room_access
+        WHERE room_id = ?1
+        "
+    )
+    .bind(room_id)
+    .fetch_all(&mut *conn)
+    .await?;
 
-    // Nobody can, the longest-standing member inherits it
-    members.first().map(|(user_id, _)| *user_id)
+    Ok(result)
 }
+

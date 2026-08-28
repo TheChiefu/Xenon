@@ -124,7 +124,7 @@ pub async fn on_join(
     match snapshot(state, user_id).await {
         Ok(users) => {
             let event = ServerEvent::PresenceSnapshot { users };
-            registry::notify_user(state, user_id, event);
+            registry::inform_user(state, user_id, event);
         }
         Err(e) => tracing::error!("could not build a presence snapshot for {user_id}: {e}")
     }
@@ -175,5 +175,5 @@ pub async fn on_change(
     };
 
     let event = ServerEvent::PresenceUpdated { user_id, presence, device };
-    registry::notify_users(state, &members, event);
+    registry::inform_users(state, &members, event);
 }

@@ -160,7 +160,7 @@ pub async fn update_me(
             avatar_file_id: profile.avatar_file_id,
             banner_file_id: profile.banner_file_id,
         };
-        registry::notify_users(&app_state, &members, event);
+        registry::inform_users(&app_state, &members, event);
     }
 
     Ok(StatusCode::NO_CONTENT)

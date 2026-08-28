@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::api;
 use crate::api::messages::attachments::{Attached, Incoming};
 use crate::error::{AppError, Result};
-use crate::models::Message;
+use crate::models::{Message, Notify};
 use crate::routes::AuthUser;
 use crate::sockets::events::ServerEvent;
 use crate::sockets::registry;
@@ -157,8 +157,11 @@ pub async fn post_message(
 
     // If message is posted, broadcast to all subscribed users in room
     if status == StatusCode::CREATED {
-        let event = ServerEvent::Message { room_id, message: response.clone() };
-        registry::broadcast(&app_state, room_id, event).await;
+        let msg_event = ServerEvent::Message { room_id, message: response.clone() };
+        registry::broadcast(&app_state, room_id, msg_event).await;
+
+        // Notify users who opted in
+        notifiable_users(&app_state, room_id, &response).await?;
     }
 
     // Message is duplicate (no broadcast)
@@ -255,4 +258,74 @@ pub async fn update_message(
     registry::broadcast(&app_state, result.room_id, event).await;
 
     Ok(Json(EditMessageResponse { edited_at: result.edited_at }))
+}
+
+// Helper Methods //
+
+/// Sends a notification event to the room's members who asked for one.
+///
+/// # Arguments
+///
+/// * `app_state` - Pool and socket registry.
+/// * `room_id` - Room the message was posted to.
+/// * `message` - Message being announced.
+async fn notifiable_users(
+    app_state: &AppState,
+    room_id: Uuid,
+    message: &MessageResponse,
+) -> Result<()> {
+
+    // Deconstruct Message
+    let author = message.author_id;
+    let body = match &message.body {
+        Some(val) => val,
+        None => "Attachment(s)"
+    };
+
+    // The author is a member, so the room resolves for them
+    let room = api::rooms::get(&app_state.pool, room_id, author).await?;
+    let author = api::users::get(&app_state.pool, author).await?;
+
+    // Construct event to send
+    let event = ServerEvent::Notification {
+        room_id,
+        room_name: room.name,
+        author: author.display_name,
+        body: body.to_string()
+    };
+
+    let mut conn = app_state.pool.acquire().await?;
+    let pairs = api::rooms::access::list_notify_pairs(&mut *conn, room_id).await?;
+
+    for pair in pairs {
+
+        // Author does not notify themselves
+        if pair.user_id == message.author_id {
+            continue;
+        }
+
+        // Users who do not opt in don't get notified
+        if pair.notify == Notify::None {
+            continue;
+        }
+
+        // Users who fully opt in, get notified
+        if pair.notify == Notify::All {
+            registry::inform_user(app_state, pair.user_id, event.clone());
+            continue;
+        }
+
+        // Users who are mentioned, get notified
+        if pair.notify == Notify::Mentions {
+
+            // The user is mentioned by ID
+            if body.contains(&format!("@{}", pair.user_id)) {
+                registry::inform_user(app_state, pair.user_id, event.clone());
+            }
+            continue;
+        }
+    }
+
+    Ok(())
+
 }
