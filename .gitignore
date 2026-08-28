@@ -11,7 +11,7 @@ target/
 
 # Xenon Files
 config.toml
-/files/*
+/server/files/*
 *.log
 
 # Testing files

@@ -467,7 +467,8 @@ async fn leave_every_room(
     Ok(rooms)
 }
 
-/// Deletes the rows an account owns
+/// Deletes the rows an account owns so that tombstone accounts
+/// don't have unused DB information sitting stagnent.
 ///
 /// # Arguments
 ///

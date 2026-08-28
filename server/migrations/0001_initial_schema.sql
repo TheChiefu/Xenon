@@ -1,21 +1,12 @@
 -- Initial schema.
 --
--- Connection settings (foreign_keys, WAL, synchronous, busy_timeout, secure_delete)
--- are NOT set here. They are per-connection concerns and live in SqliteConnectOptions.
---
--- Timestamps are unit-agnostic here: columns carry only relational CHECKs
--- (expires_at > created_at, etc). The unit is decided in Rust by now_ms(),
--- which produces Unix MILLISECONDS. Do not encode a unit in this file.
---
--- Length CHECKs here are structural. A minimum of 1 makes an empty string
--- unstorable, so "unnamed" and "no body" each have one representation.
--- Maximums live in the server config and are enforced by validate.rs.
+-- Connection settings live in SqliteConnectOptions.
+-- Timestamps are Unix milliseconds, set in Rust by now_ms().
+-- Length CHECKs are structural. Maximums live in the server config.
 
--- Content addressed: sha256 is both the dedup key and the path on disk, so
--- identical bytes are stored once and shared by attachments, avatars and banners.
---
--- filename is the first uploader's name, and every later reference reads it here.
--- mime is sniffed from the bytes at upload, which is why it carries no charset CHECK.
+
+-- Content addressed: sha256 is both the dedup key and the path on disk.
+-- filename is the first uploader's name. mime is sniffed from the bytes.
 CREATE TABLE files (
     id          BLOB PRIMARY KEY CHECK (length(id) = 16),
     sha256      BLOB NOT NULL UNIQUE CHECK (length(sha256) = 32),
@@ -25,8 +16,8 @@ CREATE TABLE files (
     created_at  INTEGER NOT NULL
 ) STRICT;
 
--- The charset stays here because the tombstone path writes a username without
--- going through validate.rs, generating the account's UUID as 32 hex characters.
+-- username is restricted to lowercase, so UNIQUE rejects 'Alice' while 'alice'
+-- exists. The email CHECK serves one_email the same way.
 CREATE TABLE users (
     id              BLOB PRIMARY KEY CHECK (length(id) = 16),
     username        TEXT NOT NULL UNIQUE
@@ -69,16 +60,13 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_user ON sessions(user_id);
 CREATE INDEX sessions_expiry ON sessions(expires_at) WHERE revoked_at IS NULL;
 
--- One room type. A DM is a Hidden room with two members and no permissions;
--- there is no discriminator column and nothing branches on room kind.
+-- Visibility:
+-- - 0: Public
+-- - 1: Locked
+-- - 2: Hidden
 --
--- visibility bundles nothing: 0 Public (discoverable, self-join),
--- 1 Locked (discoverable, invite), 2 Hidden (undiscoverable, invite).
--- The undiscoverable-but-self-joinable combination is incoherent and an enum
--- cannot express it. Two booleans could, and would need a CHECK to take it back.
---
--- default_permissions has NO DEFAULT: creation must state what a member with
--- no override may do. 0 is legitimate (read-only room), -1 grants everything.
+-- default_permissions has no DEFAULT: creation must state it. 0 is a read-only
+-- room, -1 grants everything.
 CREATE TABLE rooms (
     id                  BLOB PRIMARY KEY CHECK (length(id) = 16),
     name                TEXT NOT NULL,
@@ -89,29 +77,27 @@ CREATE TABLE rooms (
     mutation_seq        INTEGER NOT NULL DEFAULT 0 CHECK (mutation_seq >= 0)
 ) STRICT;
 
--- The directory query. Partial, so Hidden rooms are not in the index at all --
--- smaller, and the index cannot be a route to enumerating them.
--- id is a UUIDv7, so byte order is creation order and it doubles as the cursor.
+-- The directory query. Partial, so Hidden rooms are absent from the index.
+-- id is a UUIDv7: byte order is creation order, which the directory pages on
+-- with `id > ?`.
 --
--- Write the query's filter as `visibility IN (0, 1)`, matching this predicate
--- exactly. `visibility != 2` is logically identical but SQLite's partial-index
--- analysis is simple and may not match it. Verify with EXPLAIN QUERY PLAN:
--- expect SEARCH ... USING INDEX rooms_directory, not SCAN rooms.
+-- Queries must filter with `visibility IN (0, 1)` to match this predicate.
 CREATE INDEX rooms_directory ON rooms(id) WHERE visibility IN (0, 1);
 
--- Membership, for EVERY room regardless of visibility. This table alone answers
--- "may this user read this room" -- one predicate, no branch.
+-- A row grants read access to the room.
 --
--- permissions NULL means inherit rooms.default_permissions.
--- -1 is the sentinel for all permissions, present and future. A literal
--- "all current bits" would silently withhold every permission added later.
+-- permissions: NULL inherits rooms.default_permissions. -1 is every permission,
+-- including ones added later.
 --
--- granted_at is load-bearing, not display-only: it is the promotion sort key
--- when a Public room loses its last delete-room holder.
+-- Notify:
+-- - 0: None
+-- - 1: Mentions
+-- - 2: All
 CREATE TABLE room_access (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     permissions INTEGER CHECK (permissions IS NULL OR permissions >= -1),
+    notify      INTEGER NOT NULL DEFAULT 0 CHECK (notify IN (0, 1, 2)),
     granted_at  INTEGER NOT NULL,
     PRIMARY KEY (room_id, user_id)
 ) STRICT;
@@ -119,10 +105,6 @@ CREATE TABLE room_access (
 CREATE INDEX room_access_user ON room_access(user_id);
 
 -- Pending invitations to Locked and Hidden rooms. A row means invited, not joined.
--- Deliberately a separate table rather than a nullable accepted_at on room_access:
--- that column would have to be filtered by read authorization, the author-is-member
--- trigger, the zero-member count and the promotion query, and forgetting one is
--- silent over-inclusion. A missed check here just means invites do not work.
 CREATE TABLE room_invites (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -134,15 +116,9 @@ CREATE TABLE room_invites (
 
 CREATE INDEX room_invites_user ON room_invites(user_id);
 
--- Room-scoped. Banning also removes the room_access row, so a banned user is not
--- a member and nothing in the permission path consults this table -- it is read
--- at exactly one place, the join.
---
--- Expired rows are NOT swept: the join check must test expires_at regardless,
--- so a sweep would reclaim storage and lose the moderation record.
---
--- created_by is plain REFERENCES, never CASCADE. If it cascaded, hard-deleting a
--- moderator would silently lift every ban they issued.
+-- Room-scoped bans:
+-- created_by is a plain REFERENCES, never CASCADE: a cascade would lift every ban
+-- its issuer made.
 CREATE TABLE room_bans (
     room_id     BLOB NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -241,3 +217,21 @@ CREATE TABLE invites (
     revoked_at  INTEGER CHECK (revoked_at IS NULL OR revoked_at >= created_at),
     CHECK (max_uses IS NULL OR uses <= max_uses)
 ) STRICT;
+
+-- The VAPID public key browsers subscribe against.
+CREATE TABLE push_keys (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    public_key  BLOB NOT NULL CHECK (length(public_key) = 65),
+    created_at  INTEGER NOT NULL
+) STRICT;
+
+-- One row per browser subscribed to Web Push.
+CREATE TABLE push_subscriptions (
+    endpoint    TEXT NOT NULL PRIMARY KEY CHECK (length(endpoint) BETWEEN 1 AND 2048),
+    user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    p256dh      BLOB NOT NULL CHECK (length(p256dh) = 65),
+    auth        BLOB NOT NULL CHECK (length(auth) = 16),
+    created_at  INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX push_subscriptions_user ON push_subscriptions(user_id);
