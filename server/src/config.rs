@@ -2,6 +2,7 @@
 
 use std::sync::OnceLock;
 use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,7 @@ pub struct Config {
     pub info: Info,
     pub bind: Bind,
     pub storage: Storage,
+    pub database: Database,
     pub logging: Logging,
     pub session: Session,
     pub limits: Limits,
@@ -33,6 +35,7 @@ impl Default for Config {
             info: Info::default(),
             bind: Bind::default(),
             storage: Storage::default(),
+            database: Database::default(),
             logging: Logging::default(),
             session: Session::default(),
             limits: Limits::default(),
@@ -117,12 +120,20 @@ impl Config {
             _ => {}
         }
 
-        if self.storage.database.is_empty() {
-            return Err("storage.database must be set".to_string());
-        }
-
         if self.storage.files.is_empty() {
             return Err("storage.files must be set".to_string());
+        }
+
+        if self.database.path.is_empty() {
+            return Err("database.path must be set".to_string());
+        }
+
+        if self.database.max_connections < 1 {
+            return Err("database.max_connections must be at least 1".to_string());
+        }
+
+        if self.database.min_connections > self.database.max_connections {
+            return Err("database.min_connections must not exceed database.max_connections".to_string());
         }
 
         if self.session.lifetime_days < 1 {
@@ -258,9 +269,6 @@ impl Default for Bind {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Storage {
-    /// SQLite database file
-    pub database: String,
-
     /// Directory holding uploaded files, sharded by hash
     pub files: String
 }
@@ -268,8 +276,54 @@ pub struct Storage {
 impl Default for Storage {
     fn default() -> Self {
         Storage {
-            database: "chat.db".to_string(),
             files: "files".to_string()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Database {
+    /// SQLite database file
+    pub path: String,
+
+    /// Most connections open at once
+    pub max_connections: u32,
+
+    /// Connections held open while unused
+    pub min_connections: u32,
+
+    /// Seconds a request waits for a free connection
+    pub acquire_timeout_seconds: u64,
+
+    /// Seconds an unused connection stays open, 0 to keep it open
+    pub idle_timeout_seconds: u64,
+
+    /// Seconds a statement waits for the write lock
+    pub busy_timeout_seconds: u64,
+
+}
+
+impl Database {
+
+    /// How long an unused connection stays open, or `None` to keep it open.
+    pub fn idle_timeout(&self) -> Option<Duration> {
+        match self.idle_timeout_seconds {
+            0 => None,
+            seconds => Some(Duration::from_secs(seconds))
+        }
+    }
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Database {
+            path: "chat.db".to_string(),
+            max_connections: 5,
+            min_connections: 0,
+            acquire_timeout_seconds: 30,
+            idle_timeout_seconds: 600,
+            busy_timeout_seconds: 5,
         }
     }
 }

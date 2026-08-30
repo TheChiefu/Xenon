@@ -40,18 +40,22 @@ async fn main() -> Result<()> {
     ensure_files();
 
     // Set DB options and properties
-    let db_path = &config::get().storage.database;
+    let database = &config::get().database;
+    let db_path = &database.path;
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal) // Write-Ahead Logging
         .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(5))
+        .busy_timeout(Duration::from_secs(database.busy_timeout_seconds))
         .pragma("secure_delete", "ON");
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(database.max_connections)
+        .min_connections(database.min_connections)
+        .acquire_timeout(Duration::from_secs(database.acquire_timeout_seconds))
+        .idle_timeout(database.idle_timeout())
         .connect_with(options)
         .await?;
 

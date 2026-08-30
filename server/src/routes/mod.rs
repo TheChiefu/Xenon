@@ -140,6 +140,7 @@ pub fn router(state: AppState) -> Router {
         .route("/server", get(server::info))
         .route("/server/version", get(server::version))
         .route("/server/type", get(server::kind))
+        .route("/health", get(server::health_check))
         .with_state(state)
 }
 

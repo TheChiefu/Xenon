@@ -14,5 +14,8 @@ config.toml
 /server/files/*
 *.log
 
+# Sidecar Files
+vapid.key
+
 # Testing files
 /web/*

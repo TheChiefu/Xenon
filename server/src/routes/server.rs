@@ -48,3 +48,8 @@ pub async fn kind() -> Result<Json<String>> {
 
     Ok(Json(kind))
 }
+
+/// Respond server is up and healthy
+pub async fn health_check() -> Result<(StatusCode, Json<String>)> {
+    Ok((StatusCode::OK, Json("Up and running".to_string())))
+}
