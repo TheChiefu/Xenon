@@ -89,10 +89,11 @@ pub enum ServerEvent {
         body: String
     },
     Push {
+        user_id: Uuid,
         room_id: Uuid,
         room_name: String,
-        author: Uuid,
-        body: Uuid,
+        author: String,
+        body: String,
         renotify: bool
     }
 }

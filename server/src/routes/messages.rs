@@ -163,7 +163,7 @@ pub async fn post_message(
         registry::broadcast(&app_state, room_id, msg_event).await;
 
         // Notify users who opted in
-        notifiable_users(&app_state, room_id, &response).await?;
+        notify_users(&app_state, room_id, &response).await?;
     }
 
     // Message is duplicate (no broadcast)
@@ -271,7 +271,7 @@ pub async fn update_message(
 /// * `app_state` - Pool and socket registry.
 /// * `room_id` - Room the message was posted to.
 /// * `message` - Message being announced.
-async fn notifiable_users(
+async fn notify_users(
     app_state: &AppState,
     room_id: Uuid,
     message: &MessageResponse,
@@ -304,6 +304,8 @@ async fn notifiable_users(
     let mut conn = app_state.pool.acquire().await?;
     let pairs = api::rooms::access::list_notify_pairs(&mut *conn, room_id).await?;
 
+    // Get list of relevant message recipients
+    let mut recipients = Vec::new();
     for pair in pairs {
 
         // Author does not notify themselves
@@ -318,7 +320,7 @@ async fn notifiable_users(
 
         // Users who fully opt in, get notified
         if pair.notify == Notify::All {
-            registry::inform_user(app_state, pair.user_id, event.clone());
+            recipients.push(pair.user_id);
             continue;
         }
 
@@ -327,11 +329,17 @@ async fn notifiable_users(
 
             // The user is mentioned by ID
             if mentioned.contains(&pair.user_id) {
-                registry::inform_user(app_state, pair.user_id, event.clone());
+                recipients.push(pair.user_id);
             }
             continue;
         }
     }
+
+    // Inform relevant users of message
+    registry::inform_users(app_state, &recipients, event);
+
+    // Users with no socket receive a push notification
+    let offline = registry::offline_users(app_state, &recipients);
 
     Ok(())
 

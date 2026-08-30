@@ -285,6 +285,23 @@ pub fn inform_users(
     }
 }
 
+/// Reads which of the given users are not connected.
+pub fn offline_users(
+    state: &AppState,
+    users: &[Uuid],
+) -> Vec<Uuid> {
+    let reg = read_lock(state);
+
+    let mut found = Vec::new();
+    for user_id in users {
+        if !reg.contains_key(user_id) {
+            found.push(*user_id);
+        }
+    }
+
+    found
+}
+
 // Helper Methods //
 
 /// Takes the read lock, recovering it if a writer panicked while holding it.
