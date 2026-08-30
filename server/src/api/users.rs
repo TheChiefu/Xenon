@@ -1,5 +1,7 @@
 //! The `users` table.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -105,6 +107,39 @@ pub async fn get(
     .await?;
 
     user.ok_or(AppError::NotFound)
+}
+
+/// Reads the display names for a set of accounts, in one query.
+///
+/// An id naming no account is absent from the map.
+///
+/// # Arguments
+///
+/// * `pool` - Pool of SQL connections.
+/// * `ids` - Accounts to read.
+pub async fn display_names(
+    pool: &sqlx::SqlitePool,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, String>> {
+
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut conn = pool.acquire().await?;
+
+    let mut builder = sqlx::QueryBuilder::new("SELECT id, display_name FROM users WHERE id IN (");
+
+    // Each push adds one placeholder and holds its value
+    let mut list = builder.separated(", ");
+    for id in ids {
+        list.push_bind(*id);
+    }
+    list.push_unseparated(")");
+
+    let rows: Vec<(Uuid, String)> = builder.build_query_as().fetch_all(&mut *conn).await?;
+
+    Ok(rows.into_iter().collect())
 }
 
 /// Writes a user's own profile, returning it as stored, or `None` if the patch

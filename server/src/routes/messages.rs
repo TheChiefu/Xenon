@@ -1,5 +1,7 @@
 //! HTTP handlers for messages.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -286,12 +288,17 @@ async fn notifiable_users(
     let room = api::rooms::get(&app_state.pool, room_id, author).await?;
     let author = api::users::get(&app_state.pool, author).await?;
 
+    // Rewrite mentions from uuids to display names
+    let mentioned = mentioned_ids(body);
+    let names = api::users::display_names(&app_state.pool, &mentioned).await?;
+    let shown = name_mentions(body, &names);
+
     // Construct event to send
     let event = ServerEvent::Notification {
         room_id,
         room_name: room.name,
         author: author.display_name,
-        body: body.to_string()
+        body: shown
     };
 
     let mut conn = app_state.pool.acquire().await?;
@@ -319,7 +326,7 @@ async fn notifiable_users(
         if pair.notify == Notify::Mentions {
 
             // The user is mentioned by ID
-            if body.contains(&format!("@{}", pair.user_id)) {
+            if mentioned.contains(&pair.user_id) {
                 registry::inform_user(app_state, pair.user_id, event.clone());
             }
             continue;
@@ -329,3 +336,80 @@ async fn notifiable_users(
     Ok(())
 
 }
+
+/// Collects the accounts a message body mentions, each account once.
+///
+/// A mention is `@` followed by the account's hyphenated uuid. An `@` not
+/// followed by a valid uuid is ignored.
+///
+/// # Arguments
+///
+/// * `body` - Message contents as they are stored.
+fn mentioned_ids(body: &str) -> Vec<Uuid> {
+    let mut found: Vec<Uuid> = Vec::new();
+    let mut text = body;
+
+    while let Some(byte_index) = text.find('@') {
+
+        // Retrieve and parse UUID from mention
+        let after_at = byte_index + 1;
+        let id = mention_id(text, after_at);
+
+        if let Some(id) = id {
+            if !found.contains(&id) {
+                found.push(id);
+            }
+        }
+
+        // Next iteration starts after current mention
+        text = &text[after_at..];
+    }
+
+    found
+}
+
+/// Replaces each mention in a message body with the account's display name.
+///
+/// A mention whose id is absent from `names` is left unchanged. The uuid is
+/// parsed rather than matched as text, so it resolves in any letter case.
+///
+/// # Arguments
+///
+/// * `body` - Message contents as they are stored.
+/// * `names` - Display name for each account, keyed by id.
+fn name_mentions(body: &str, names: &HashMap<Uuid, String>) -> String {
+    let mut output = String::with_capacity(body.len());
+    let mut text = body;
+
+    while let Some(byte_index) = text.find('@') {
+
+        // Retrieve and parse UUID from mention
+        let after_at: usize = byte_index + 1;
+        let id = mention_id(text, after_at);
+
+        // Copies text up to and including the '@'
+        output.push_str(&text[..after_at]);
+
+        // The display name is written instead of the uuid
+        if let Some(id) = id {
+            if let Some(name) = names.get(&id) {
+                output.push_str(name);
+                text = &text[after_at + uuid::fmt::Hyphenated::LENGTH..];
+                continue;
+            }
+        }
+
+        // Next iteration starts after current mention
+        text = &text[after_at..];
+    }
+
+    output.push_str(text);
+    output
+}
+
+/// Attempt to extract UUID from mention, given a text body and after "@" byte position
+fn mention_id(text: &str, after_at: usize) -> Option<Uuid> {
+    text.get(after_at..after_at + uuid::fmt::Hyphenated::LENGTH)
+        .and_then(|uuid| Uuid::try_parse(uuid).ok())
+}
+
