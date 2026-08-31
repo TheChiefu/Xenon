@@ -15,6 +15,14 @@ pub enum ClientEvent {
     Status { status: Status }
 }
 
+/// What the push sidecar sends over its socket.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SidecarEvent {
+    /// The key browsers subscribe against, 65 bytes
+    Key { public_key: Vec<u8> }
+}
+
 /// A user and what the reader is told to show for them.
 #[derive(Serialize, Clone)]
 pub struct UserPresence {
@@ -23,6 +31,14 @@ pub struct UserPresence {
 
     /// Unset until the user's client declares one
     pub device: Option<Device>
+}
+
+/// One browser a push message is sent to.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Subscription {
+    pub endpoint: String,
+    pub p256dh: Vec<u8>,
+    pub auth: Vec<u8>
 }
 
 #[derive(Serialize, Clone)]
@@ -89,11 +105,11 @@ pub enum ServerEvent {
         body: String
     },
     Push {
-        user_id: Uuid,
         room_id: Uuid,
         room_name: String,
         author: String,
         body: String,
-        renotify: bool
+        renotify: bool,
+        subscriptions: Vec<Subscription>
     }
 }

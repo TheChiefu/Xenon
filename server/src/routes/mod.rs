@@ -3,6 +3,7 @@
 mod auth;
 mod files;
 pub mod messages;
+mod push;
 mod rooms;
 mod server;
 mod users;
@@ -17,6 +18,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::error::{AppError, Result};
+use crate::sockets;
 use crate::sockets::connection;
 use crate::state::AppState;
 use crate::utils;
@@ -134,6 +136,14 @@ pub fn router(state: AppState) -> Router {
             .delete(users::delete_user)
         )
         .route("/users/{id}/role", patch(users::set_role))
+
+        // Push
+        .route("/push/ws", get(sockets::push::push_handler))
+        .route("/push/vapid", get(push::vapid_key))
+        .route("/me/push",
+            post(push::subscribe)
+            .delete(push::unsubscribe)
+        )
 
         // Other
         .route("/ws", get(connection::ws_handler))

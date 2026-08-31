@@ -109,7 +109,7 @@ pub async fn get(
     user.ok_or(AppError::NotFound)
 }
 
-/// Reads the display names for a set of accounts, in one query.
+/// Reads the display names for a set of accounts.
 ///
 /// An id naming no account is absent from the map.
 ///

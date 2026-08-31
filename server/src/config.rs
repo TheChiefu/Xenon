@@ -25,6 +25,7 @@ pub struct Config {
     pub database: Database,
     pub logging: Logging,
     pub session: Session,
+    pub push: Push,
     pub limits: Limits,
 }
 
@@ -38,6 +39,7 @@ impl Default for Config {
             database: Database::default(),
             logging: Logging::default(),
             session: Session::default(),
+            push: Push::default(),
             limits: Limits::default(),
         }
     }
@@ -364,6 +366,22 @@ impl Default for Session {
         Session {
             lifetime_days: 30,
             renew_after_days_elapsed: 1
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Push {
+    /// What the push sidecar sends to connect. Its own config holds the same
+    /// string. Empty refuses every connection
+    pub secret: String
+}
+
+impl Default for Push {
+    fn default() -> Self {
+        Push {
+            secret: String::new()
         }
     }
 }

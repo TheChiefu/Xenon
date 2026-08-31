@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::api;
 use crate::api::messages::attachments::{Attached, Incoming};
+use crate::api::rooms::access::NotifyUserPair;
 use crate::error::{AppError, Result};
 use crate::models::{Message, Notify};
 use crate::routes::AuthUser;
@@ -75,6 +76,15 @@ pub struct MessageResponse {
 #[derive(Serialize)]
 pub struct EditMessageResponse {
     pub edited_at: i64
+}
+
+/// What a notification shows
+#[derive(Clone)]
+struct Announcement {
+    room_id: Uuid,
+    room_name: String,
+    author: String,
+    body: String
 }
 
 /// Query string selecting which page of a room's history to read.
@@ -277,39 +287,94 @@ async fn notify_users(
     message: &MessageResponse,
 ) -> Result<()> {
 
-    // Deconstruct Message
-    let author = message.author_id;
+    // Construct message to send to users
+    let body = match &message.body {
+        Some(val) => val,
+        None => "Attachment(s)"
+    };
+
+    // Check who is mentioned and construct the announcement
+    let mentioned = mentioned_ids(body);
+    let announcement = announce(app_state, room_id, message, &mentioned).await?;
+
+    // Get list of recipients eligible for receiving the notification
+    let mut conn = app_state.pool.acquire().await?;
+    let pairs = api::rooms::access::list_notify_pairs(&mut *conn, room_id).await?;
+    let recipients = recipients(&pairs, message.author_id, &mentioned);
+
+    // Create notification server event
+    let event = ServerEvent::Notification {
+        room_id,
+        room_name: announcement.room_name.clone(),
+        author: announcement.author.clone(),
+        body: announcement.body.clone()
+    };
+
+    // Notify connections users
+    registry::inform_users(app_state, &recipients, event);
+
+    // Push notifications to offline users
+    let offline = registry::offline_users(app_state, &recipients);
+    push_offline(app_state, announcement, &offline).await?;
+
+    Ok(())
+
+}
+
+/// Builds what a notification for this message shows, with mentions read as
+/// display names rather than uuids.
+///
+/// # Arguments
+///
+/// * `app_state` - Pool and socket registry.
+/// * `room_id` - Room the message was posted to.
+/// * `message` - Message being announced.
+/// * `mentioned` - Accounts the body names.
+async fn announce(
+    app_state: &AppState,
+    room_id: Uuid,
+    message: &MessageResponse,
+    mentioned: &[Uuid],
+) -> Result<Announcement> {
+
     let body = match &message.body {
         Some(val) => val,
         None => "Attachment(s)"
     };
 
     // The author is a member, so the room resolves for them
-    let room = api::rooms::get(&app_state.pool, room_id, author).await?;
-    let author = api::users::get(&app_state.pool, author).await?;
+    let room = api::rooms::get(&app_state.pool, room_id, message.author_id).await?;
+    let author = api::users::get(&app_state.pool, message.author_id).await?;
 
-    // Rewrite mentions from uuids to display names
-    let mentioned = mentioned_ids(body);
-    let names = api::users::display_names(&app_state.pool, &mentioned).await?;
-    let shown = name_mentions(body, &names);
+    // Get display names of everyone mentioned
+    let names = api::users::display_names(&app_state.pool, mentioned).await?;
 
-    // Construct event to send
-    let event = ServerEvent::Notification {
+    Ok(Announcement {
         room_id,
         room_name: room.name,
         author: author.display_name,
-        body: shown
-    };
+        body: name_mentions(body, &names)
+    })
+}
 
-    let mut conn = app_state.pool.acquire().await?;
-    let pairs = api::rooms::access::list_notify_pairs(&mut *conn, room_id).await?;
+/// Selects the room's members who asked to be told about this message.
+///
+/// # Arguments
+///
+/// * `pairs` - Every member and what they opted into.
+/// * `author_id` - The message's author, who is not notified.
+/// * `mentioned` - Accounts the body names.
+fn recipients(
+    pairs: &[NotifyUserPair],
+    author_id: Uuid,
+    mentioned: &[Uuid],
+) -> Vec<Uuid> {
+    let mut found = Vec::new();
 
-    // Get list of relevant message recipients
-    let mut recipients = Vec::new();
     for pair in pairs {
 
         // Author does not notify themselves
-        if pair.user_id == message.author_id {
+        if pair.user_id == author_id {
             continue;
         }
 
@@ -320,29 +385,53 @@ async fn notify_users(
 
         // Users who fully opt in, get notified
         if pair.notify == Notify::All {
-            recipients.push(pair.user_id);
+            found.push(pair.user_id);
             continue;
         }
 
         // Users who are mentioned, get notified
-        if pair.notify == Notify::Mentions {
-
-            // The user is mentioned by ID
-            if mentioned.contains(&pair.user_id) {
-                recipients.push(pair.user_id);
-            }
-            continue;
+        if pair.notify == Notify::Mentions && mentioned.contains(&pair.user_id) {
+            found.push(pair.user_id);
         }
     }
 
-    // Inform relevant users of message
-    registry::inform_users(app_state, &recipients, event);
+    found
+}
 
-    // Users with no socket receive a push notification
-    let offline = registry::offline_users(app_state, &recipients);
+/// Sends one push event for the recipients with no socket.
+///
+/// # Arguments
+///
+/// * `app_state` - Pool and push channel.
+/// * `announcement` - What the notification shows.
+/// * `offline` - Recipients with no socket.
+async fn push_offline(
+    app_state: &AppState,
+    announcement: Announcement,
+    offline: &[Uuid],
+) -> Result<()> {
+    let subscriptions = api::push::subscriptions_for(&app_state.pool, offline).await?;
+
+    if subscriptions.is_empty() {
+        return Ok(());
+    }
+
+    let push = ServerEvent::Push {
+        room_id: announcement.room_id,
+        room_name: announcement.room_name,
+        author: announcement.author,
+        body: announcement.body,
+        renotify: true,
+        subscriptions
+    };
+
+    // Dropped when the push sidecar is not connected
+    match serde_json::to_string(&push) {
+        Ok(payload) => { let _ = app_state.push_channel.send(payload); }
+        Err(e) => tracing::error!("failed to serialize push event: {e}")
+    }
 
     Ok(())
-
 }
 
 /// Collects the accounts a message body mentions, each account once.

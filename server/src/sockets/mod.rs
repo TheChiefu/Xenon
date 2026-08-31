@@ -4,4 +4,5 @@
 pub mod connection;
 pub mod events;
 pub mod presence;
+pub mod push;
 pub mod registry;
