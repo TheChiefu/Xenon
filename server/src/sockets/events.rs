@@ -110,6 +110,14 @@ pub enum ServerEvent {
         author: String,
         body: String,
         renotify: bool,
-        subscriptions: Vec<Subscription>
+        user_ids: Vec<Uuid>
+    },
+    Subscribe {
+        user_id: Uuid,
+        subscription: Subscription
+    },
+    Unsubscribe {
+        user_id: Uuid,
+        endpoint: String
     }
 }

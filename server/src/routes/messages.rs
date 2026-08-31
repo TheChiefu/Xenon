@@ -315,7 +315,7 @@ async fn notify_users(
 
     // Push notifications to offline users
     let offline = registry::offline_users(app_state, &recipients);
-    push_offline(app_state, announcement, &offline).await?;
+    push_offline(app_state, announcement, offline);
 
     Ok(())
 
@@ -398,22 +398,21 @@ fn recipients(
     found
 }
 
-/// Sends one push event for the recipients with no socket.
+/// Sends one push event naming the recipients with no socket. The sidecar
+/// resolves which of them have a push subscription.
 ///
 /// # Arguments
 ///
-/// * `app_state` - Pool and push channel.
+/// * `app_state` - Push channel.
 /// * `announcement` - What the notification shows.
 /// * `offline` - Recipients with no socket.
-async fn push_offline(
+fn push_offline(
     app_state: &AppState,
     announcement: Announcement,
-    offline: &[Uuid],
-) -> Result<()> {
-    let subscriptions = api::push::subscriptions_for(&app_state.pool, offline).await?;
-
-    if subscriptions.is_empty() {
-        return Ok(());
+    offline: Vec<Uuid>,
+) {
+    if offline.is_empty() {
+        return;
     }
 
     let push = ServerEvent::Push {
@@ -422,7 +421,7 @@ async fn push_offline(
         author: announcement.author,
         body: announcement.body,
         renotify: true,
-        subscriptions
+        user_ids: offline
     };
 
     // Dropped when the push sidecar is not connected
@@ -430,8 +429,6 @@ async fn push_offline(
         Ok(payload) => { let _ = app_state.push_channel.send(payload); }
         Err(e) => tracing::error!("failed to serialize push event: {e}")
     }
-
-    Ok(())
 }
 
 /// Collects the accounts a message body mentions, each account once.

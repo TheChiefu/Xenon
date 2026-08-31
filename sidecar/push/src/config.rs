@@ -22,7 +22,10 @@ pub struct Config {
     pub subject: String,
 
     /// Seconds a push service keeps a message for a browser that is not connected
-    pub ttl: u32
+    pub ttl: u32,
+
+    /// File browser subscriptions are persisted to
+    pub subscriptions: String
 }
 
 impl Default for Config {
@@ -31,7 +34,8 @@ impl Default for Config {
             xenon: "ws://127.0.0.1:3000/push/ws".to_string(),
             secret: String::new(),
             subject: String::new(),
-            ttl: 86400
+            ttl: 86400,
+            subscriptions: "subscriptions.json".to_string()
         }
     }
 }

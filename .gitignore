@@ -16,6 +16,7 @@ config.toml
 
 # Sidecar Files
 vapid.key
+subscriptions.json
 
 # Testing files
 /web/*

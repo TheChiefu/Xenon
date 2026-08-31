@@ -6,6 +6,7 @@ mod config;
 mod encrypt;
 mod events;
 mod send;
+mod storage;
 mod vapid;
 
 use std::error::Error;
@@ -20,6 +21,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::config::Config;
 use crate::events::{Payload, ServerEvent, SidecarEvent};
 use crate::send::Outcome;
+use crate::storage::Store;
 
 /// Seconds to wait before connecting to Xenon again
 const RECONNECT_SECONDS: u64 = 5;
@@ -42,10 +44,18 @@ async fn main() {
         }
     };
 
+    let mut store = match Store::load(&config.subscriptions) {
+        Ok(store) => store,
+        Err(e) => {
+            eprintln!("{}: {e}", config.subscriptions);
+            return;
+        }
+    };
+
     let client = Client::new();
 
     loop {
-        if let Err(e) = connect(&config, &key, &client).await {
+        if let Err(e) = connect(&config, &key, &client, &mut store).await {
             eprintln!("{}: {e}", config.xenon);
         }
 
@@ -62,7 +72,13 @@ async fn main() {
 /// * `config` - Xenon's address, the shared secret, and the contact URI.
 /// * `key` - The signing key.
 /// * `client` - Shared HTTP client.
-async fn connect(config: &Config, key: &SecretKey, client: &Client) -> Result<(), Box<dyn Error>> {
+/// * `store` - Browser subscriptions, kept across reconnects.
+async fn connect(
+    config: &Config,
+    key: &SecretKey,
+    client: &Client,
+    store: &mut Store,
+) -> Result<(), Box<dyn Error>> {
 
     let mut request = config.xenon.as_str().into_client_request()?;
     let secret = format!("Bearer {}", config.secret);
@@ -89,22 +105,42 @@ async fn connect(config: &Config, key: &SecretKey, client: &Client) -> Result<()
             }
         };
 
-        deliver(config, key, client, event).await;
+        match event {
+            ServerEvent::Push { room_id, room_name, author, body, renotify, user_ids } => {
+                deliver(config, key, client, store, room_id, room_name, author, body, renotify, user_ids).await;
+            }
+            ServerEvent::Subscribe { user_id, subscription } => store.upsert(&user_id, &subscription),
+            ServerEvent::Unsubscribe { user_id, endpoint } => store.remove(&user_id, &endpoint)
+        }
     }
 
     Ok(())
 }
 
-/// Sends one notification to every browser it names.
+/// Sends one notification to every browser subscribed for the named users,
+/// resolving their subscriptions from the store.
 ///
 /// # Arguments
 ///
 /// * `config` - Xenon's address, the shared secret, and the contact URI.
 /// * `key` - The signing key.
 /// * `client` - Shared HTTP client.
-/// * `event` - What Xenon sent.
-async fn deliver(config: &Config, key: &SecretKey, client: &Client, event: ServerEvent) {
-    let ServerEvent::Push { room_id, room_name, author, body, renotify, subscriptions } = event;
+/// * `store` - Browser subscriptions; pruned as dead endpoints are found.
+/// * `room_id`, `room_name`, `author`, `body`, `renotify` - What the notification shows.
+/// * `user_ids` - Accounts to notify.
+async fn deliver(
+    config: &Config,
+    key: &SecretKey,
+    client: &Client,
+    store: &mut Store,
+    room_id: String,
+    room_name: String,
+    author: String,
+    body: String,
+    renotify: bool,
+    user_ids: Vec<String>,
+) {
+    let subscriptions = store.subscriptions_for(&user_ids);
 
     let payload = Payload {
         room_id,
@@ -136,6 +172,14 @@ async fn deliver(config: &Config, key: &SecretKey, client: &Client, event: Serve
 
         match result {
             Ok(Outcome::Sent) => println!("{}: accepted", subscription.endpoint),
+
+            // The push service confirms the browser will never accept this
+            // endpoint again, so it is safe to forget
+            Ok(Outcome::Gone) => {
+                println!("{}: the subscription no longer exists, removing", subscription.endpoint);
+                store.remove_by_endpoint(&subscription.endpoint);
+            }
+
             Ok(outcome) => eprintln!("{}: {}", subscription.endpoint, describe(&outcome)),
             Err(e) => eprintln!("{}: {e}", subscription.endpoint)
         }

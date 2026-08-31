@@ -217,20 +217,11 @@ CREATE TABLE invites (
     CHECK (max_uses IS NULL OR uses <= max_uses)
 ) STRICT;
 
--- The VAPID public key browsers subscribe against
+-- The VAPID public key browsers subscribe against. Browser subscriptions
+-- themselves (push_subscriptions) are not Xenon's to keep: only the push
+-- sidecar reads them, so they live in its own store instead.
 CREATE TABLE push_keys (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
     public_key  BLOB NOT NULL CHECK (length(public_key) = 65),
     created_at  INTEGER NOT NULL
 ) STRICT;
-
--- One row per browser subscribed to Web Push
-CREATE TABLE push_subscriptions (
-    endpoint    TEXT NOT NULL PRIMARY KEY CHECK (length(endpoint) BETWEEN 1 AND 2048),
-    user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    p256dh      BLOB NOT NULL CHECK (length(p256dh) = 65),
-    auth        BLOB NOT NULL CHECK (length(auth) = 16),
-    created_at  INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX push_subscriptions_user ON push_subscriptions(user_id);
