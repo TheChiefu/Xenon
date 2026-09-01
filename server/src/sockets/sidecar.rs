@@ -1,4 +1,4 @@
-//! The push sidecar's WebSocket, from the handshake until it closes.
+//! The sidecar's WebSocket, from the handshake until it closes.
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
@@ -10,25 +10,26 @@ use tokio::sync::broadcast;
 
 use crate::api;
 use crate::config;
-use crate::sockets::events::SidecarEvent;
+use crate::sockets::events::{ServerEvent, SidecarEvent};
+use crate::sockets::links;
 use crate::state::AppState;
 
 // Socketing Methods //
 
-/// Upgrades the push sidecar's request into a WebSocket.
+/// Upgrades the sidecar's request into a WebSocket.
 ///
 /// # Arguments
 ///
-/// * `state` - Pool, socket registry, and push events.
+/// * `state` - Pool, socket registry, and the channel to the sidecar.
 /// * `headers` - Head of the request, carrying the shared secret.
 /// * `ws` - The upgrade handshake.
-pub async fn push_handler(
+pub async fn handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
 
-    let expected = &config::get().push.secret;
+    let expected = &config::get().sidecar.secret;
 
     // An unset secret refuses every connection
     if expected.is_empty() {
@@ -55,11 +56,11 @@ pub async fn push_handler(
 /// # Arguments
 ///
 /// * `socket` - The sidecar's connection.
-/// * `state` - Pool, socket registry, and push events.
+/// * `state` - Pool, socket registry, and the channel to the sidecar.
 async fn handle_socket(socket: WebSocket, state: AppState) {
-    tracing::info!("the push sidecar connected");
+    tracing::info!("the sidecar connected");
 
-    let mut events = state.push_channel.subscribe();
+    let mut events = state.to_sidecar.subscribe();
     let (mut outgoing, mut incoming) = socket.split();
 
     tokio::select! {
@@ -68,12 +69,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 }
 
-/// Writes each push event to the socket, returning when it cannot.
+/// Writes each event to the socket, returning when it cannot.
 ///
 /// # Arguments
 ///
 /// * `socket` - Write half of the sidecar's connection.
-/// * `events` - Push events to write.
+/// * `events` - Events to write.
 async fn send_events(
     socket: &mut SplitSink<WebSocket, Message>,
     events: &mut broadcast::Receiver<String>,
@@ -86,7 +87,7 @@ async fn send_events(
             // the earliest to make room. These were overwritten before the
             // sidecar read them, and nothing stores them, so they are lost.
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                tracing::warn!("the push sidecar skipped {skipped} events");
+                tracing::warn!("the sidecar skipped {skipped} events");
                 continue;
             }
 
@@ -104,7 +105,7 @@ async fn send_events(
 /// # Arguments
 ///
 /// * `socket` - Read half of the sidecar's connection.
-/// * `state` - Pool, socket registry, and push events.
+/// * `state` - Pool, socket registry, and the channel to the sidecar.
 async fn read_events(socket: &mut SplitStream<WebSocket>, state: &AppState) {
     while let Some(Ok(message)) = socket.next().await {
 
@@ -115,18 +116,43 @@ async fn read_events(socket: &mut SplitStream<WebSocket>, state: &AppState) {
         let event: SidecarEvent = match serde_json::from_str(&text) {
             Ok(event) => event,
             Err(e) => {
-                tracing::warn!("the push sidecar sent an event that did not parse: {e}");
+                tracing::warn!("the sidecar sent an event that did not parse: {e}");
                 continue;
             }
         };
 
         match event {
-            SidecarEvent::Key { public_key } => {
+            SidecarEvent::VapidKey { public_key } => {
                 if let Err(e) = api::push::set_key(&state.pool, &public_key).await {
                     tracing::error!("could not store the push public key: {e}");
                 }
             }
+            SidecarEvent::GetLinkedAccounts => links::send_linked_users(state).await,
+            SidecarEvent::LinkUrl { user_id, platform, authorize_url } => {
+                links::on_link_url(state, user_id, platform, authorize_url)
+            }
+            SidecarEvent::LinkResult { outcome } => links::on_link_result(state, outcome).await,
+            SidecarEvent::NeedsReauth { user_id, platform } => {
+                links::on_needs_reauth(state, user_id, platform)
+            }
+            SidecarEvent::Presence { user_id, platform, status, title } => {
+                links::on_presence(state, user_id, platform, status, title).await
+            }
         }
+    }
+}
+
+/// Serializes an event and offers it to the sidecar's connection. Dropped
+/// when no sidecar is connected.
+///
+/// # Arguments
+///
+/// * `state` - Pool, socket registry, and the channel to the sidecar.
+/// * `event` - Event to send.
+pub fn send(state: &AppState, event: ServerEvent) {
+    match serde_json::to_string(&event) {
+        Ok(payload) => { let _ = state.to_sidecar.send(payload); }
+        Err(e) => tracing::error!("failed to serialize a sidecar event: {e}")
     }
 }
 

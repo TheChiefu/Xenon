@@ -1,9 +1,11 @@
 //! What the server pushes to a connected client, and what one may send back.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::Status;
+use crate::models::{Platform, Status};
 use crate::routes::messages::MessageResponse;
 use crate::sockets::presence::{Device, Presence};
 
@@ -15,12 +17,65 @@ pub enum ClientEvent {
     Status { status: Status }
 }
 
-/// What the push sidecar sends over its socket.
-#[derive(Deserialize)]
+/// How a linked game account appears to someone sharing a room with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GamePresence {
+    Online,
+    Offline,
+    Away
+}
+
+/// How one link attempt ended.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LinkOutcome {
+    Linked {
+        user_id: Uuid,
+        platform: Platform,
+        handle: String
+    },
+    Error {
+        user_id: Uuid,
+        platform: Platform,
+        message: String
+    }
+}
+
+/// What the sidecar sends over its socket.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SidecarEvent {
     /// The key browsers subscribe against, 65 bytes
-    Key { public_key: Vec<u8> }
+    VapidKey { public_key: Vec<u8> },
+
+    /// Where to send someone to sign in with the platform
+    LinkUrl {
+        user_id: Uuid,
+        platform: Platform,
+        authorize_url: String
+    },
+
+    /// How a link attempt ended
+    LinkResult { outcome: LinkOutcome },
+
+    /// This user's link stopped renewing and has to be made again
+    NeedsReauth {
+        user_id: Uuid,
+        platform: Platform
+    },
+
+    /// Sent when a linked account's presence changes
+    Presence {
+        user_id: Uuid,
+        platform: Platform,
+        status: GamePresence,
+        title: Option<String>
+    },
+
+    /// Asks for every user Xenon lists as linked. The sidecar drops the
+    /// credentials of anyone missing from the answer
+    GetLinkedAccounts
 }
 
 /// A user and what the reader is told to show for them.
@@ -119,5 +174,45 @@ pub enum ServerEvent {
     Unsubscribe {
         user_id: Uuid,
         endpoint: String
+    },
+    LinkRequested {
+        user_id: Uuid,
+        platform: Platform
+    },
+
+    /// The callback's query string, passed on unread
+    LinkCallback {
+        params: HashMap<String, String>
+    },
+    LinkedAccounts {
+        user_ids: Vec<Uuid>
+    },
+    LinkUrl {
+        platform: Platform,
+        authorize_url: String
+    },
+    AccountLinked {
+        user_id: Uuid,
+        platform: Platform,
+        handle: String
+    },
+    AccountUnlinked {
+        user_id: Uuid,
+        platform: Platform
+    },
+    LinkFailed {
+        user_id: Uuid,
+        platform: Platform,
+        message: String
+    },
+    LinkNeedsReauth {
+        user_id: Uuid,
+        platform: Platform
+    },
+    GamePresenceUpdated {
+        user_id: Uuid,
+        platform: Platform,
+        status: GamePresence,
+        title: Option<String>
     }
 }

@@ -2,6 +2,7 @@
 
 mod auth;
 mod files;
+mod links;
 pub mod messages;
 mod push;
 mod rooms;
@@ -138,12 +139,20 @@ pub fn router(state: AppState) -> Router {
         .route("/users/{id}/role", patch(users::set_role))
 
         // Push
-        .route("/push/ws", get(sockets::push::push_handler))
+        .route("/sidecar/ws", get(sockets::sidecar::handler))
         .route("/push/vapid", get(push::vapid_key))
         .route("/me/push",
             post(push::subscribe)
             .delete(push::unsubscribe)
         )
+
+        // Linked game accounts
+        .route("/me/links", get(links::list))
+        .route("/me/links/{platform}",
+            post(links::start)
+            .delete(links::unlink)
+        )
+        .route("/links/callback", get(links::callback))
 
         // Other
         .route("/ws", get(connection::ws_handler))

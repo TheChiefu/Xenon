@@ -151,22 +151,6 @@ pub async fn on_change(
         return;
     }
 
-    let mut conn = match state.pool.acquire().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            tracing::error!("presence could not acquire a connection: {e}");
-            return;
-        }
-    };
-
-    let members = match db::shared_room_member_ids(&mut conn, user_id).await {
-        Ok(members) => members,
-        Err(e) => {
-            tracing::error!("could not read who shares a room with {user_id}: {e}");
-            return;
-        }
-    };
-
     // Empty once they hold no connection, which is what going offline is
     let declared = registry::statuses_of(state, &[user_id]);
     let device = match declared.first() {
@@ -175,5 +159,5 @@ pub async fn on_change(
     };
 
     let event = ServerEvent::PresenceUpdated { user_id, presence, device };
-    registry::inform_users(state, &members, event);
+    registry::inform_shared_members(state, user_id, event).await;
 }

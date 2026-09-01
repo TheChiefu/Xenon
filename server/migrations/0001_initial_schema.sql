@@ -39,14 +39,15 @@ CREATE TABLE users (
 CREATE UNIQUE INDEX one_owner ON users(global_role) WHERE global_role = 0 AND deleted_at IS NULL;
 CREATE UNIQUE INDEX one_email ON users(email) WHERE email IS NOT NULL AND deleted_at IS NULL;
 
+-- Not an auth path: identity and display only. No platform_user_id, no
+-- credential columns, no uniqueness constraint over a platform id — this
+-- table holds only "this user is linked to this platform, show this
+-- handle for them," nothing more.
 CREATE TABLE linked_accounts (
-    user_id          BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    platform         INTEGER NOT NULL CHECK (platform IN (0, 1, 2)),
-    platform_user_id TEXT NOT NULL CHECK (length(platform_user_id) BETWEEN 1 AND 128),
-    platform_handle  TEXT CHECK (platform_handle IS NULL OR length(platform_handle) <= 128),
-    linked_at        INTEGER NOT NULL,
-    PRIMARY KEY (user_id, platform),
-    UNIQUE (platform, platform_user_id)
+    user_id         BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    platform        INTEGER NOT NULL CHECK (platform IN (0, 1, 2)),
+    platform_handle TEXT NOT NULL CHECK (length(platform_handle) <= 128),
+    PRIMARY KEY (user_id, platform)
 ) STRICT;
 
 CREATE TABLE sessions (

@@ -426,7 +426,7 @@ fn push_offline(
 
     // Dropped when the push sidecar is not connected
     match serde_json::to_string(&push) {
-        Ok(payload) => { let _ = app_state.push_channel.send(payload); }
+        Ok(payload) => { let _ = app_state.to_sidecar.send(payload); }
         Err(e) => tracing::error!("failed to serialize push event: {e}")
     }
 }

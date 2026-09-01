@@ -4,5 +4,6 @@
 pub mod connection;
 pub mod events;
 pub mod presence;
-pub mod push;
+pub mod links;
 pub mod registry;
+pub mod sidecar;

@@ -25,7 +25,7 @@ pub struct Config {
     pub database: Database,
     pub logging: Logging,
     pub session: Session,
-    pub push: Push,
+    pub sidecar: Sidecar,
     pub limits: Limits,
 }
 
@@ -39,7 +39,7 @@ impl Default for Config {
             database: Database::default(),
             logging: Logging::default(),
             session: Session::default(),
-            push: Push::default(),
+            sidecar: Sidecar::default(),
             limits: Limits::default(),
         }
     }
@@ -372,15 +372,16 @@ impl Default for Session {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
-pub struct Push {
-    /// What the push sidecar sends to connect. Its own config holds the same
-    /// string. Empty refuses every connection
+pub struct Sidecar {
+    /// What the sidecar sends to connect, authenticating the one connection
+    /// that carries push, Xbox linking and OAuth. Empty refuses every
+    /// connection
     pub secret: String
 }
 
-impl Default for Push {
+impl Default for Sidecar {
     fn default() -> Self {
-        Push {
+        Sidecar {
             secret: String::new()
         }
     }

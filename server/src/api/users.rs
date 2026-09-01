@@ -2,17 +2,37 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::linked_accounts;
 use crate::api::rooms::access;
 use crate::db;
 use crate::error::{AppError, Result};
-use crate::models::{GlobalRole, Status, UserProfile, UserSummary};
+use crate::models::{GlobalRole, LinkedAccount, Status, UserRow, UserSummary};
 use crate::utils;
 use crate::validate;
 
 // Data Structs //
+
+/// A user as a client sees them: their row, and what they have linked.
+#[derive(Serialize)]
+pub struct UserProfile {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: String,
+    pub description: String,
+    pub avatar_file_id: Option<Uuid>,
+    pub banner_file_id: Option<Uuid>,
+    pub global_role: GlobalRole,
+    pub created_at: i64,
+
+    /// Set on a tombstoned account, which a client marks rather than hides
+    pub deleted_at: Option<i64>,
+
+    /// Empty for a user who has linked nothing
+    pub links: Vec<LinkedAccount>
+}
 
 /// PATCH body for a user's own profile. An absent field is left as it stands.
 #[derive(Deserialize)]
@@ -94,7 +114,7 @@ pub async fn get(
 
     let mut conn = pool.acquire().await?;
 
-    let user: Option<UserProfile> = sqlx::query_as(
+    let row: Option<UserRow> = sqlx::query_as(
         "
         SELECT id, username, display_name, description, avatar_file_id,
                banner_file_id, global_role, created_at, deleted_at
@@ -106,7 +126,21 @@ pub async fn get(
     .fetch_optional(&mut *conn)
     .await?;
 
-    user.ok_or(AppError::NotFound)
+    let row = row.ok_or(AppError::NotFound)?;
+    let links = linked_accounts::list(pool, user_id).await?;
+
+    Ok(UserProfile {
+        id: row.id,
+        username: row.username,
+        display_name: row.display_name,
+        description: row.description,
+        avatar_file_id: row.avatar_file_id,
+        banner_file_id: row.banner_file_id,
+        global_role: row.global_role,
+        created_at: row.created_at,
+        deleted_at: row.deleted_at,
+        links
+    })
 }
 
 /// Reads the display names for a set of accounts.
@@ -159,7 +193,7 @@ pub async fn update(
     pool: &sqlx::SqlitePool,
     user_id: Uuid,
     patch: ProfilePatch,
-) -> Result<Option<UserProfile>> {
+) -> Result<Option<UserRow>> {
 
     // Check if any field has changed from update patch
     let changed = patch.display_name.is_some()
@@ -186,7 +220,7 @@ pub async fn update(
     // - nullif returns NULL when both arguments match, so the nil id clears
     // - RETURNING hands back what the row ends up holding, which is neither the
     //   value a patch left out nor the nil id it clears with
-    let stored: UserProfile = sqlx::query_as(
+    let stored: UserRow = sqlx::query_as(
         "
         UPDATE users SET
             display_name = COALESCE(?1, display_name),

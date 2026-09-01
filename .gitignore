@@ -15,8 +15,11 @@ config.toml
 *.log
 
 # Sidecar Files
-vapid.key
+node_modules/
+vapid.json
 subscriptions.json
+xbox_links.json
+*.json.tmp
 
-# Testing files
+# Client
 /web/*

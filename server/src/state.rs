@@ -3,9 +3,13 @@
 //! - who is connected
 //! - any sidecars
 
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
+
 use axum::extract::FromRef;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
+use uuid::Uuid;
 
 use crate::config;
 use crate::sockets::registry::Registry;
@@ -19,8 +23,11 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub registry: Registry,
 
-    /// Push events: read by the push sidecar's connection
-    pub push_channel: broadcast::Sender<String>
+    /// Jobs for the sidecar: read by the sidecar's connection
+    pub to_sidecar: broadcast::Sender<String>,
+
+    /// Users whose game account link stopped renewing
+    pub needs_reauth: Arc<RwLock<HashSet<Uuid>>>
 }
 
 impl AppState {
@@ -32,13 +39,14 @@ impl AppState {
     /// * `pool` - Pool of SQL connections.
     pub fn new(pool: SqlitePool) -> Self {
 
-        // Create the broadcast channel push events are sent on
-        let (push_channel, _) = broadcast::channel(config::get().limits.message_buffer);
+        // Create the broadcast channel the sidecar's connection reads
+        let (to_sidecar, _) = broadcast::channel(config::get().limits.message_buffer);
 
         AppState {
             pool,
             registry: Registry::default(),
-            push_channel
+            to_sidecar,
+            needs_reauth: Arc::new(RwLock::new(HashSet::new()))
         }
     }
 }

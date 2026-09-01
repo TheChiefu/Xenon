@@ -10,6 +10,7 @@ use crate::api;
 use crate::error::{AppError, Result};
 use crate::routes::AuthUser;
 use crate::sockets::events::{ServerEvent, Subscription};
+use crate::sockets::sidecar;
 use crate::state::AppState;
 
 // Data Structs //
@@ -50,7 +51,7 @@ pub async fn subscribe(
     Json(subscription): Json<Subscription>,
 ) -> Result<StatusCode> {
 
-    send(&state, ServerEvent::Subscribe { user_id, subscription });
+    sidecar::send(&state, ServerEvent::Subscribe { user_id, subscription });
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -70,22 +71,8 @@ pub async fn unsubscribe(
     Json(request): Json<UnsubscribeRequest>,
 ) -> Result<StatusCode> {
 
-    send(&state, ServerEvent::Unsubscribe { user_id, endpoint: request.endpoint });
+    sidecar::send(&state, ServerEvent::Unsubscribe { user_id, endpoint: request.endpoint });
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-// Helper Methods //
-
-/// Serializes an event and sends it on the push channel.
-///
-/// # Arguments
-///
-/// * `state` - Push channel the sidecar reads.
-/// * `event` - Event to send.
-fn send(state: &AppState, event: ServerEvent) {
-    match serde_json::to_string(&event) {
-        Ok(payload) => { let _ = state.push_channel.send(payload); }
-        Err(e) => tracing::error!("failed to serialize push event: {e}")
-    }
-}

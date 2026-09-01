@@ -241,6 +241,37 @@ pub async fn broadcast(
     inform_users(state, &members, event);
 }
 
+/// Sends an event to every member of every room one user is in.
+///
+/// # Arguments
+///
+/// * `state` - Pool and socket registry.
+/// * `user_id` - User whose rooms decide who receives the event.
+/// * `event` - What to send.
+pub async fn inform_shared_members(
+    state: &AppState,
+    user_id: Uuid,
+    event: ServerEvent,
+) {
+    let mut conn = match state.pool.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!("could not acquire a connection: {e}");
+            return;
+        }
+    };
+
+    let members = match db::shared_room_member_ids(&mut conn, user_id).await {
+        Ok(members) => members,
+        Err(e) => {
+            tracing::error!("could not read who shares a room with {user_id}: {e}");
+            return;
+        }
+    };
+
+    inform_users(state, &members, event);
+}
+
 /// Sends an event to one user.
 ///
 /// # Arguments

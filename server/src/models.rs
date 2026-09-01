@@ -41,6 +41,15 @@ pub enum Notify {
     All = 2,
 }
 
+/// A game service an account is linked to, stored as an integer. (PERMANENT)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[repr(i8)]
+pub enum Platform {
+    Xbox = 0,
+    Steam = 1
+}
+
 /// What a user asks to appear as while connected, stored as an integer. (PERMANENT)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -197,9 +206,9 @@ pub struct UserSummary {
     pub display_name: String,
 }
 
-/// A user's profile, holding every column a client may see.
+/// The `users` columns a client may see.
 #[derive(sqlx::FromRow, Serialize)]
-pub struct UserProfile {
+pub struct UserRow {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
@@ -211,6 +220,16 @@ pub struct UserProfile {
 
     /// Set on a tombstoned account, which a client marks rather than hides
     pub deleted_at: Option<i64>
+}
+
+/// A `linked_accounts` row.
+#[derive(sqlx::FromRow, Serialize)]
+pub struct LinkedAccount {
+    // Platform's name (ie. Xbox)
+    pub platform: Platform,
+
+    /// Name shown for the account
+    pub handle: String
 }
 
 // Room //

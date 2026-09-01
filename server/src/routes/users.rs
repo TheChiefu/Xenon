@@ -7,10 +7,10 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::api::users::ProfilePatch;
+use crate::api::users::{ProfilePatch, UserProfile};
 use crate::db;
 use crate::error::Result;
-use crate::models::{GlobalRole, Status, UserProfile, UserSummary};
+use crate::models::{GlobalRole, Status, UserSummary};
 use crate::routes::AuthUser;
 use crate::sockets::events::ServerEvent;
 use crate::sockets::{presence, registry};
@@ -323,3 +323,4 @@ pub async fn set_role(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
