@@ -2,6 +2,12 @@
 name = "xenon"
 version = "0.3.0"
 edition = "2024"
+authors = ["Austin Lanphear <austin@soltek.games>"]
+description = "Private self hostable chat application that uses SQLite for database operations. Additional operations use NodeJS sidecar for handling outside services."
+readme = "README.md"
+repository = "https://github.com/TheChiefu/xenon"
+keyword = ["chat", "selfhost", "sqlite"]
+publish = false
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
