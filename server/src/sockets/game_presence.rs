@@ -1,4 +1,4 @@
-//! What each linked account last reported, and who is told it.
+//! What each linked account last reported, and who it is sent to.
 
 use std::collections::HashMap;
 
@@ -14,12 +14,6 @@ use crate::state::AppState;
 
 /// Stores what a linked account reported and sends it to everyone sharing a
 /// room with its owner.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `user_id` - User the linked account belongs to.
-/// * `game` - What the account reported.
 pub async fn on_report(
     state: &AppState,
     user_id: Uuid,
@@ -49,19 +43,14 @@ pub async fn on_report(
     registry::inform_shared_members(state, user_id, event).await;
 }
 
-/// Builds what a connecting user is told about the linked accounts of everyone
-/// they share a room with. Only members on one are named.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `user_id` - User the snapshot is built for.
+/// Builds the game presence list a connecting user is sent. It contains
+/// everyone they share a room with who is on a linked account.
 pub async fn snapshot(
     state: &AppState,
     user_id: Uuid,
 ) -> Result<Vec<UserGamePresence>> {
 
-    // Who the user may be told about
+    // The members whose game presence this user may see
     let mut conn = state.pool.acquire().await?;
     let members = db::shared_room_member_ids(&mut conn, user_id).await?;
 
@@ -79,13 +68,8 @@ pub async fn snapshot(
     Ok(users)
 }
 
-/// Removes a user's game presence and tells everyone sharing a room with them
-/// that their linked account is on nothing.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `user_id` - User whose status became Invisible.
+/// Removes a user's game presence and sends everyone sharing a room with them
+/// an Offline update for that account.
 pub async fn clear(state: &AppState, user_id: Uuid) {
     let removed = write_map(state).remove(&user_id);
     let Some(game) = removed else {

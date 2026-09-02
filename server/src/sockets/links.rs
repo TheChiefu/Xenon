@@ -1,4 +1,4 @@
-//! Who is told what when the sidecar reports something about a linked
+//! Who is sent what when the sidecar reports something about a linked
 //! account.
 
 use std::collections::HashSet;
@@ -12,11 +12,7 @@ use crate::sockets::registry;
 use crate::sockets::sidecar;
 use crate::state::AppState;
 
-/// Sends the sidecar the id of every user with a link.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
+/// Sends the sidecar the id of every user with a link
 pub async fn send_linked_users(state: &AppState) {
     match api::linked_accounts::list_users(&state.pool, Platform::Xbox).await {
         Ok(user_ids) => sidecar::send(state, ServerEvent::LinkedAccounts { user_ids }),
@@ -28,9 +24,7 @@ pub async fn send_linked_users(state: &AppState) {
 ///
 /// # Arguments
 ///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
 /// * `user_id` - User who asked to link.
-/// * `platform` - Service being linked.
 /// * `authorize_url` - Address to open to sign in.
 pub fn on_link_url(
     state: &AppState,
@@ -42,12 +36,7 @@ pub fn on_link_url(
     registry::inform_user(state, user_id, event);
 }
 
-/// Stores a finished link attempt and tells the account it belongs to.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `outcome` - How the attempt ended.
+/// Stores a finished link attempt and sends the outcome to the user it belongs to
 pub async fn on_link_result(state: &AppState, outcome: LinkOutcome) {
     let (user_id, platform, handle) = match outcome {
         LinkOutcome::Linked { user_id, platform, handle } => (user_id, platform, handle),
@@ -71,24 +60,13 @@ pub async fn on_link_result(state: &AppState, outcome: LinkOutcome) {
     registry::inform_user(state, user_id, event);
 }
 
-/// Records that a link stopped renewing, and sends that to its owner.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `user_id` - Owner of the link.
-/// * `platform` - Service that stopped renewing.
+/// Records that a link stopped renewing, and sends a LinkNeedsReauth to its owner
 pub fn on_needs_reauth(state: &AppState, user_id: Uuid, platform: Platform) {
     write_reauth(state).insert(user_id);
     registry::inform_user(state, user_id, ServerEvent::LinkNeedsReauth { user_id, platform });
 }
 
-/// Whether this user has a link that has to be made again.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `user_id` - Owner of the link.
+/// Whether this user has a link that has to be made again
 pub fn needs_reauth(state: &AppState, user_id: Uuid) -> bool {
     match state.needs_reauth.read() {
         Ok(guard) => guard.contains(&user_id),
@@ -101,11 +79,7 @@ pub fn needs_reauth(state: &AppState, user_id: Uuid) -> bool {
 
 // Helper Methods //
 
-/// Locks the needs_reauth set for writing.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
+/// Write which users have a link that stopped renewing (RwLock)
 fn write_reauth(state: &AppState) -> std::sync::RwLockWriteGuard<'_, HashSet<Uuid>> {
     match state.needs_reauth.write() {
         Ok(guard) => guard,

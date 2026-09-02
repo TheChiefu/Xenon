@@ -1,4 +1,4 @@
-//! What a viewer is told about a user, and who is told it.
+//! What is sent to a viewer about a user, and who it is sent to.
 
 use uuid::Uuid;
 
@@ -12,8 +12,8 @@ use crate::sockets::game_presence;
 use crate::sockets::registry;
 use crate::state::AppState;
 
-/// What a viewer is told about someone, from their [`Status`] and whether they
-/// hold a connection. Invisible reads as Offline.
+/// How a user appears to a viewer, from their [`Status`] and whether
+/// they have a connection (Invisible appears as Offline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Presence {
@@ -36,11 +36,6 @@ pub enum Device {
 }
 
 /// Reads the status a user's connections start at.
-///
-/// # Arguments
-///
-/// * `state` - Pool and socket registry.
-/// * `user_id` - User to read.
 pub async fn preferred_status(
     state: &AppState,
     user_id: Uuid,
@@ -50,19 +45,14 @@ pub async fn preferred_status(
     db::preferred_status(&mut conn, user_id).await
 }
 
-/// Builds what a connecting user is told about everyone they share a room
-/// with, leaving out any who read as Offline.
-///
-/// # Arguments
-///
-/// * `state` - Pool and socket registry.
-/// * `user_id` - User the snapshot is built for.
+/// Builds the presence list a connecting user is sent. It contains everyone
+/// they share a room with, apart from anyone reported as Offline.
 pub async fn snapshot(
     state: &AppState,
     user_id: Uuid,
 ) -> Result<Vec<UserPresence>> {
 
-    // Who the user may be told about
+    // The members whose presence this user may see
     let mut conn = state.pool.acquire().await?;
     let members = db::shared_room_member_ids(&mut conn, user_id).await?;
 
@@ -85,7 +75,7 @@ pub async fn snapshot(
     Ok(users)
 }
 
-/// What a viewer is told about a user.
+/// The presence a viewer sees for a given status.
 ///
 /// # Arguments
 ///
@@ -101,14 +91,8 @@ pub fn from_status(status: Option<Status>) -> Presence {
 
 }
 
-/// Sends the presence a join changes on both sides: the room is told the new
-/// member's presence, and the new member is sent a snapshot covering everyone
-/// now visible.
-///
-/// # Arguments
-///
-/// * `state` - Pool and socket registry.
-/// * `user_id` - User who joined.
+/// Sends the new member's presence to the room
+/// and a snapshot of everyone visible to the new member.
 pub async fn on_join(
     state: &AppState,
     user_id: Uuid,
@@ -122,7 +106,7 @@ pub async fn on_join(
     // No previous status: the room could not see the new member until now
     on_change(state, user_id, None, Some(entry.status)).await;
 
-    // Covers everyone the new member now shares a room with
+    // A failed snapshot is logged, and the member joins with no presence list
     match snapshot(state, user_id).await {
         Ok(users) => {
             let event = ServerEvent::PresenceSnapshot { users };
@@ -132,13 +116,11 @@ pub async fn on_join(
     }
 }
 
-/// Tells everyone sharing a room with a user what to show for that user, when
-/// it differs from what was shown before.
+/// Sends a user's new presence to everyone sharing a room with them, when it
+/// differs from the presence they had before.
 ///
 /// # Arguments
 ///
-/// * `state` - Pool and socket registry.
-/// * `user_id` - User whose status changed.
 /// * `before` - Status they held, or `None` before they connected.
 /// * `after` - Status they hold now, or `None` once disconnected.
 pub async fn on_change(
@@ -158,7 +140,7 @@ pub async fn on_change(
         return;
     }
 
-    // Empty once they hold no connection, which is what going offline is
+    // A user with no connection has no device
     let declared = registry::statuses_of(state, &[user_id]);
     let device = match declared.first() {
         Some(entry) => entry.device,
