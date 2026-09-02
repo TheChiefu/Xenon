@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::api;
 use crate::models::Platform;
-use crate::sockets::events::{GamePresence, LinkOutcome, ServerEvent};
+use crate::sockets::events::{LinkOutcome, ServerEvent};
 use crate::sockets::registry;
 use crate::sockets::sidecar;
 use crate::state::AppState;
@@ -83,27 +83,6 @@ pub fn on_needs_reauth(state: &AppState, user_id: Uuid, platform: Platform) {
     registry::inform_user(state, user_id, ServerEvent::LinkNeedsReauth { user_id, platform });
 }
 
-/// Sends a presence change to everyone sharing a room with that user, which
-/// is what shows under their name.
-///
-/// # Arguments
-///
-/// * `state` - Pool, socket registry, and the channel to the sidecar.
-/// * `user_id` - User the presence belongs to.
-/// * `platform` - Service the presence came from.
-/// * `status` - How they now appear.
-/// * `title` - What they are playing, unset when that is unknown.
-pub async fn on_presence(
-    state: &AppState,
-    user_id: Uuid,
-    platform: Platform,
-    status: GamePresence,
-    title: Option<String>,
-) {
-    let event = ServerEvent::GamePresenceUpdated { user_id, platform, status, title };
-    registry::inform_shared_members(state, user_id, event).await;
-}
-
 /// Whether this user has a link that has to be made again.
 ///
 /// # Arguments
@@ -122,7 +101,7 @@ pub fn needs_reauth(state: &AppState, user_id: Uuid) -> bool {
 
 // Helper Methods //
 
-/// Takes the write lock over the users whose link stopped renewing.
+/// Locks the needs_reauth set for writing.
 ///
 /// # Arguments
 ///

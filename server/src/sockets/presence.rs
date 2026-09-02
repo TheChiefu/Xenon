@@ -8,6 +8,7 @@ use crate::db;
 use crate::error::Result;
 use crate::models::Status;
 use crate::sockets::events::{ServerEvent, UserPresence};
+use crate::sockets::game_presence;
 use crate::sockets::registry;
 use crate::state::AppState;
 
@@ -30,7 +31,8 @@ pub enum Device {
     Macos,
     Linux,
     Android,
-    Ios
+    Ios,
+    Xbox
 }
 
 /// Reads the status a user's connections start at.
@@ -145,6 +147,11 @@ pub async fn on_change(
     before: Option<Status>,
     after: Option<Status>,
 ) {
+    // Invisible users have no game presence
+    if after == Some(Status::Invisible) && before != Some(Status::Invisible) {
+        game_presence::clear(state, user_id).await;
+    }
+
     // An Invisible user connecting or leaving is not a change to a viewer
     let presence = from_status(after);
     if presence == from_status(before) {

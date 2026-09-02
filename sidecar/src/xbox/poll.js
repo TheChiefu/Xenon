@@ -10,7 +10,17 @@ import * as store from './store.js';
 import { ensureXsts } from './session.js';
 import { DeadLinkError, InvalidClientError } from './oauth.js';
 
-const presenceCache = new Map(); // xuid -> last-known { state, title }
+const presenceCache = new Map(); // xuid -> last-known { status, title, activity }
+
+/// Forgets what every account last reported, so the next tick sends its
+/// presence again rather than returning early on an unchanged one.
+///
+/// Called when the connection to Xenon opens. Xenon holds what it was last
+/// told, and a Xenon that just started holds nothing, so the cache here has to
+/// stop matching for that to be filled in again.
+export function clearCache() {
+  presenceCache.clear();
+}
 
 export async function tick(config, send) {
   for (const account of store.all()) {
@@ -44,7 +54,10 @@ async function pollOne(account, config, send) {
   }
 
   const previous = presenceCache.get(account.xuid);
-  if (previous && previous.status === presence.status && previous.title === presence.title) return;
+  if (previous
+    && previous.status === presence.status
+    && previous.title === presence.title
+    && previous.activity === presence.activity) return;
 
   presenceCache.set(account.xuid, presence);
   send({
@@ -53,6 +66,7 @@ async function pollOne(account, config, send) {
     platform: 'xbox',
     status: presence.status,
     title: presence.title,
+    activity: presence.activity,
   });
 }
 
@@ -75,7 +89,7 @@ async function fetchPresence(xuid, xsts) {
 /// `devices` the body contains.
 function parsePresence(json) {
   if (json.state !== 'Online') {
-    return { status: json.state.toLowerCase(), title: undefined };
+    return { status: json.state.toLowerCase(), title: undefined, activity: undefined };
   }
 
   // A user can appear under several devices at once, a console and a phone.
@@ -84,17 +98,18 @@ function parsePresence(json) {
   //
   // `name` is the game. `richPresence` describes what they are doing inside
   // it, such as "Main Menu - Title Screen", and many titles leave it unset.
+  // They are sent apart, so Xenon decides how the two read together.
   for (const device of json.devices ?? []) {
     for (const title of device.titles ?? []) {
       if (title.placement !== 'Full') continue;
 
-      const activity = title.activity?.richPresence;
       return {
         status: 'online',
-        title: activity ? `${title.name}: ${activity}` : title.name,
+        title: title.name,
+        activity: title.activity?.richPresence,
       };
     }
   }
 
-  return { status: 'online', title: undefined };
+  return { status: 'online', title: undefined, activity: undefined };
 }

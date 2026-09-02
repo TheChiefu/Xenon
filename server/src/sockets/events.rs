@@ -26,6 +26,19 @@ pub enum GamePresence {
     Away
 }
 
+/// What a linked account last reported about the user who owns it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameActivity {
+    pub platform: Platform,
+    pub status: GamePresence,
+
+    /// Name of the game
+    pub title: Option<String>,
+
+    /// What the game says they are doing
+    pub activity: Option<String>
+}
+
 /// How one link attempt ended.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -68,14 +81,23 @@ pub enum SidecarEvent {
     /// Sent when a linked account's presence changes
     Presence {
         user_id: Uuid,
-        platform: Platform,
-        status: GamePresence,
-        title: Option<String>
+
+        #[serde(flatten)]
+        game: GameActivity
     },
 
     /// Asks for every user Xenon lists as linked. The sidecar drops the
     /// credentials of anyone missing from the answer
     GetLinkedAccounts
+}
+
+/// A user and the linked account they are on.
+#[derive(Serialize, Clone)]
+pub struct UserGamePresence {
+    pub user_id: Uuid,
+
+    #[serde(flatten)]
+    pub game: GameActivity
 }
 
 /// A user and what the reader is told to show for them.
@@ -145,6 +167,9 @@ pub enum ServerEvent {
     PresenceSnapshot {
         users: Vec<UserPresence>
     },
+    GamePresenceSnapshot {
+        users: Vec<UserGamePresence>
+    },
     ProfileUpdated {
         user_id: Uuid,
         display_name: String,
@@ -211,8 +236,8 @@ pub enum ServerEvent {
     },
     GamePresenceUpdated {
         user_id: Uuid,
-        platform: Platform,
-        status: GamePresence,
-        title: Option<String>
+
+        #[serde(flatten)]
+        game: GameActivity
     }
 }

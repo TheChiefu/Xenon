@@ -11,6 +11,7 @@ use tokio::sync::broadcast;
 use crate::api;
 use crate::config;
 use crate::sockets::events::{ServerEvent, SidecarEvent};
+use crate::sockets::game_presence;
 use crate::sockets::links;
 use crate::state::AppState;
 
@@ -67,6 +68,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         _ = send_events(&mut outgoing, &mut events) => {}
         _ = read_events(&mut incoming, &state) => {}
     }
+
+    // Nothing reports game presence when the sidecar gone
+    game_presence::clear_all(&state);
 }
 
 /// Writes each event to the socket, returning when it cannot.
@@ -135,8 +139,8 @@ async fn read_events(socket: &mut SplitStream<WebSocket>, state: &AppState) {
             SidecarEvent::NeedsReauth { user_id, platform } => {
                 links::on_needs_reauth(state, user_id, platform)
             }
-            SidecarEvent::Presence { user_id, platform, status, title } => {
-                links::on_presence(state, user_id, platform, status, title).await
+            SidecarEvent::Presence { user_id, game } => {
+                game_presence::on_report(state, user_id, game).await
             }
         }
     }

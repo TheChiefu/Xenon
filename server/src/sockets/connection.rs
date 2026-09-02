@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::models::Status;
 use crate::routes::AuthUser;
 use crate::sockets::events::{ClientEvent, ServerEvent};
+use crate::sockets::game_presence;
 use crate::sockets::presence::{self, Device};
 use crate::sockets::registry::{self, Joined, SocketDevice};
 use crate::state::AppState;
@@ -144,6 +145,37 @@ async fn send_snapshot(
         Ok(payload) => payload,
         Err(e) => {
             tracing::error!("failed to serialize the presence snapshot: {e}");
+            return;
+        }
+    };
+
+    let _ = socket.send(Message::Text(payload.into())).await;
+
+    send_game_snapshot(state, viewer_id, socket).await;
+}
+
+/// Writes what every linked account visible to a socket is on, before any
+/// update can reach it.
+///
+/// A failure is logged and the connection carries on: the client is left
+/// without an initial picture rather than dropped.
+async fn send_game_snapshot(
+    state: &AppState,
+    viewer_id: Uuid,
+    socket: &mut SplitSink<WebSocket, Message>,
+) {
+    let users = match game_presence::snapshot(state, viewer_id).await {
+        Ok(users) => users,
+        Err(e) => {
+            tracing::error!("could not build a game presence snapshot for {viewer_id}: {e}");
+            return;
+        }
+    };
+
+    let payload = match serde_json::to_string(&ServerEvent::GamePresenceSnapshot { users }) {
+        Ok(payload) => payload,
+        Err(e) => {
+            tracing::error!("failed to serialize the game presence snapshot: {e}");
             return;
         }
     };

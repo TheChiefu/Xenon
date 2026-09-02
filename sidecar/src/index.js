@@ -41,7 +41,11 @@ run(config, {
     // Without a VAPID key Xenon has nothing to serve at GET /push/vapid, so
     // no browser can subscribe and no job is ever composed.
     if (pushEnabled) send({ type: 'vapid_key', public_key: push.publicKeyBytes() });
-    if (xboxEnabled) send({ type: 'get_linked_accounts' });
+    if (xboxEnabled) {
+      send({ type: 'get_linked_accounts' });
+      // Xenon may have just started, holding no presence at all
+      xboxPoll.clearCache();
+    }
   },
 
   onMessage(type, event, send) {
