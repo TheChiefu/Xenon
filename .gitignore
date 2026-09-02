@@ -19,6 +19,7 @@ node_modules/
 vapid.json
 subscriptions.json
 xbox_links.json
+games.json
 *.json.tmp
 
 # Client

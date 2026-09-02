@@ -48,18 +48,23 @@ Back these up. Losing `vapid.json` orphans every stored subscription.
 
 In the working directory:
 
-- `game_titles.json`: what to show a game as, keyed on the name the service
-  reports it under
+- `games.json`: how a game is shown, keyed on the reported name
 
 ```json
 {
-  "helldivers 2": "Helldivers 2",
-  "halo: the master chief collection": "Halo MCC"
+  "helldivers_2": { "name": "Helldivers 2" },
+  "halo_the_master_chief_collection": {
+    "name": "Halo MCC",
+    "activity": { "H: CE": "CE", "H: R": "Reach", "H2": "2" }
+  }
 }
 ```
 
-The sidecar removes `™`, `®` and `©` from every game name, then replaces a
-listed name with its value, shown exactly as written. Matching ignores
-capitalization, spacing, straight or curly quotes, and hyphen or dash.
+The sidecar removes `™`, `®` and `©` from every game name.
+Reported game names are normalized to `snake_case` and matched
+against the file to the server owner's preferred name.
 
-A new entry takes effect on the next restart.
+`activity` matches and renames the game activity's presence also to a preferred value.
+Converting values like:  `H: R: Campaign - Normal` to `Reach (Campaign - Normal)`.
+
+A new entry takes effect on the next sidecar restart.
