@@ -9,7 +9,7 @@
 import * as store from './store.js';
 import { ensureXsts } from './session.js';
 import { DeadLinkError, InvalidClientError } from './oauth.js';
-import { clean } from '../titles.js';
+import { clean, cleanActivity } from '../games.js';
 
 const presenceCache = new Map(); // xuid -> last-known { status, title, activity }
 
@@ -114,7 +114,7 @@ function parsePresence(json) {
       return {
         status: json.state,
         title: clean(title.name),
-        activity: title.activity?.richPresence,
+        activity: cleanActivity(title.name, title.activity?.richPresence),
       };
     }
   }
