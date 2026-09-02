@@ -9,6 +9,7 @@
 import * as store from './store.js';
 import { ensureXsts } from './session.js';
 import { DeadLinkError, InvalidClientError } from './oauth.js';
+import { clean } from '../titles.js';
 
 const presenceCache = new Map(); // xuid -> last-known { status, title, activity }
 
@@ -70,6 +71,11 @@ async function pollOne(account, config, send) {
   });
 }
 
+// https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/live/rest/uri/presence/uri-usersxuidget
+//
+// `level` selects how much of the record comes back. The default, `title`,
+// returns everything except each title's activity, so `all` is what makes
+// `richPresence` present.
 async function fetchPresence(xuid, xsts) {
   const response = await fetch(`https://userpresence.xboxlive.com/users/xuid(${xuid})?level=all`, {
     headers: {
@@ -85,11 +91,13 @@ async function fetchPresence(xuid, xsts) {
   return parsePresence(json);
 }
 
+// https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/live/rest/json/json-presencerecord
+//
 /// Reads a presence response. `state` selects which of `lastSeen` and
-/// `devices` the body contains.
+/// `devices` the body contains, and is reported in Xbox's own words.
 function parsePresence(json) {
   if (json.state !== 'Online') {
-    return { status: json.state.toLowerCase(), title: undefined, activity: undefined };
+    return { status: json.state, title: undefined, activity: undefined };
   }
 
   // A user can appear under several devices at once, a console and a phone.
@@ -104,12 +112,12 @@ function parsePresence(json) {
       if (title.placement !== 'Full') continue;
 
       return {
-        status: 'online',
-        title: title.name,
+        status: json.state,
+        title: clean(title.name),
         activity: title.activity?.richPresence,
       };
     }
   }
 
-  return { status: 'online', title: undefined, activity: undefined };
+  return { status: json.state, title: undefined, activity: undefined };
 }

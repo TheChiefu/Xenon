@@ -43,3 +43,23 @@ In the working directory, mode 0600:
 - `xbox_links.json`: Xbox refresh tokens and the XUID mapping
 
 Back these up. Losing `vapid.json` orphans every stored subscription.
+
+## Files it reads
+
+In the working directory:
+
+- `game_titles.json`: what to show a game as, keyed on the name the service
+  reports it under
+
+```json
+{
+  "helldivers 2": "Helldivers 2",
+  "halo: the master chief collection": "Halo MCC"
+}
+```
+
+The sidecar removes `™`, `®` and `©` from every game name, then replaces a
+listed name with its value, shown exactly as written. Matching ignores
+capitalization, spacing, straight or curly quotes, and hyphen or dash.
+
+A new entry takes effect on the next restart.

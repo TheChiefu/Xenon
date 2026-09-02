@@ -1,5 +1,6 @@
 // The Microsoft and Xbox Live OAuth exchanges. HTTP and JSON throughout:
 // Microsoft does the signing.
+// Docs: https://github.com/MicrosoftDocs/xbox-live-docs/tree/docs
 
 const AUTHORIZE_TOKEN_URL = 'https://login.live.com/oauth20_token.srf';
 const USER_AUTH_URL = 'https://user.auth.xboxlive.com/user/authenticate';

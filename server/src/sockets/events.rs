@@ -19,7 +19,7 @@ pub enum ClientEvent {
 
 /// How a linked game account appears to someone sharing a room with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "PascalCase")]
 pub enum GamePresence {
     Online,
     Offline,
