@@ -1,5 +1,6 @@
 [package]
 name = "xenon"
+rust-version = "1.85"
 version = "0.3.7"
 edition = "2024"
 authors = ["Austin Lanphear <austin@soltek.games>"]

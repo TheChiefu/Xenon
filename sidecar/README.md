@@ -1,55 +1,57 @@
-# Running the sidecar
+# Sidecar
 
-    cd sidecar && npm install
+The sidecar is a Node service that connects to the server and handles the work
+the server does not do itself. It sends web push notifications and polls Xbox for
+account linking and presence. It reads the server's [config.toml](../server/config.md)
+and writes its own files beside it.
 
-Start it from the directory that contains the server's `config.toml`:
+To enable each service add one or more of the following headers:
+- [push](#push)
+- [xbox](#xbox)
 
-    cd server && node ../sidecar/src/index.js
+Note: _A missing key is named in the startup error._
 
-## Config
+## Setup
 
-Keys the sidecar reads from `config.toml`, which the server writes on first run.
-Anything missing is named in the startup error.
-
-`[push]` and `[xbox]` each run a service by being in the file. Write one or
-both.
-
-```toml
-[bind]
-ip = "127.0.0.1"                     # connects to ws://ip:port/push/ws
-port = 3000
-
-[sidecar]
-secret = "..."                       # sent as Authorization: Bearer
-
-[push]
-subject = "mailto:you@example.com"   # VAPID sub claim, mailto: or https://
-ttl = 86400                          # seconds a push service stores an undelivered message
-
-[xbox]
-client_id = "..."                    # Entra app registration, personal accounts
-client_secret = "..."                # Entra client secret value, not its id
-redirect_uri = "https://example.com/xbox/callback"   # registered on that app, Web platform
-poll_interval_seconds = 60
-refresh_interval_seconds = 3600
+```bash
+cd sidecar && npm install
 ```
 
-## Files it writes
+Start it from the directory that contains the server's `config.toml`:
+```bash
+cd server && node ../sidecar/src/index.js
+```
 
-In the working directory, mode 0600:
+## `[push]`
 
-- `vapid.json`: the VAPID keypair, generated on first start
-- `subscriptions.json`: browser push subscriptions
-- `xbox_links.json`: Xbox refresh tokens and the XUID mapping
+| Key | Example | Meaning |
+|-|-|-|
+| `subject` | `"mailto:you@example.com"` | VAPID sub claim, a `mailto:` or `https://` URL |
+| `ttl` | `86400` | Seconds a push service stores an undelivered message |
 
-Back these up. Losing `vapid.json` orphans every stored subscription.
+Writes:
+- `vapid.json`: the keypair, generated on first start
+- `subscriptions.json`: the browser subscriptions
 
-## Files it reads
+Losing `vapid.json` orphans every stored subscription.
 
-In the working directory:
+## `[xbox]`
 
-- `games.json`: how a game is shown, keyed on the reported name
+| Key | Example | Meaning |
+|-|-|-|
+| `client_id` | | Entra app registration, personal accounts |
+| `client_secret` | | Entra client secret value |
+| `redirect_uri` | `"https://example.com/xbox/callback"` | Registered on that app, Web platform |
+| `poll_interval_seconds` | `60` | How often presence is polled |
+| `refresh_interval_seconds` | `3600` | How often expiring tokens are refreshed |
 
+Writes:
+- `xbox_links.json`: Refresh tokens and XUID mapping
+
+Reads:
+- `games.json`: Keyed on reported name from Xbox
+
+Example:
 ```json
 {
   "helldivers_2": { "name": "Helldivers 2" },
@@ -59,12 +61,16 @@ In the working directory:
   }
 }
 ```
-
-The sidecar removes `™`, `®` and `©` from every game name.
-Reported game names are normalized to `snake_case` and matched
-against the file to the server owner's preferred name.
-
-`activity` matches and renames the game activity's presence also to a preferred value.
-Converting values like:  `H: R: Campaign - Normal` to `Reach (Campaign - Normal)`.
+Reported game names are normalized to `snake_case` for matching to the keyed
+values. The keys are:
+- `name` renames the game's title to the preferred value
+- `activity` matches the start of the reported activity and replaces it, keeping
+  whatever follows in parentheses
+  - `H: R: Campaign - Normal` becomes `Reach (Campaign - Normal)`, and an
+    activity that is only the prefix becomes `Reach`
 
 A new entry takes effect on the next sidecar restart.
+
+Games not listed in the file have `™`, `®` and `©` removed from their reported
+name. A listed game shows its mapped `name` exactly as written.
+
