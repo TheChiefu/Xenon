@@ -37,12 +37,24 @@ User accounts can be one of the following global roles:
 
 ## Building
 Requires Rust 1.85 or newer (this crate uses edition 2024). Distribution packages
-on other OS's (such as Ubuntu Server) are using older packages than that, so install
-via: [rustup](https://rustup.rs) rather than `apt install cargo`.
+are often older than that, so install via: [rustup](https://rustup.rs) rather
+than a package manager.
 
-SQLite is compiled from source, so a C toolchain is also needed:
+SQLite and the TLS library are compiled from source, so a C compiler and cmake
+are also needed.
+
+Arch:
 ```bash
-sudo apt install build-essential
+sudo pacman -S base-devel cmake
+```
+
+Debian and Ubuntu:
+```bash
+sudo apt install build-essential cmake
+```
+
+Then build:
+```bash
 cd server
 cargo build --release
 ```
